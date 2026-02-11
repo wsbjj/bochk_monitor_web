@@ -1,0 +1,2 @@
+web: gunicorn -w 1 -b 0.0.0.0:$PORT web:app
+worker: python monitor.py
