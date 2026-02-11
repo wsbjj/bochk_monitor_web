@@ -1,0 +1,21 @@
+{
+  "monitor": {
+    "check_dates": [
+      "20260213",
+      "20260214",
+      "20260223",
+      "20260224"
+    ],
+    "interval_seconds": 60,
+    "notify_on_available": true
+  },
+  "email": {
+    "mail_host": "smtp.qq.com",
+    "mail_user": "",
+    "mail_pass": "",
+    "sender": "",
+    "receivers": [
+      ""
+    ]
+  }
+}

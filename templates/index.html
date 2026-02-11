@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>中银香港预约监控</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f6f7f9; color: #111; margin: 0; }
+    header { background: #0f2d52; color: #fff; padding: 16px 24px; }
+    main { max-width: 920px; margin: 24px auto; padding: 0 16px; }
+    .card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .row > div { flex: 1 1 260px; }
+    label { display: block; font-weight: 600; margin-bottom: 6px; }
+    input[type="text"], input[type="number"], input[type="password"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; }
+    button { padding: 8px 14px; border-radius: 6px; border: none; cursor: pointer; }
+    .primary { background: #0f2d52; color: #fff; }
+    .secondary { background: #e0e4ea; color: #111; }
+    .muted { color: #666; }
+    .pill { display: inline-block; padding: 6px 12px; border-radius: 999px; background: #eef2f7; font-size: 12px; color: #0f2d52; text-decoration: none; border: 1px solid #d7dde6; }
+    .pill:hover { background: #e3e9f2; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .flash { padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; }
+    .flash-success { background: #e7f6ee; color: #0f5132; }
+    .flash-error { background: #fdecea; color: #842029; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>中银香港预约监控</h1>
+  </header>
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="card">
+      <h2>状态</h2>
+      <div class="row">
+        <div>
+          <div><strong>运行中:</strong> {{ '是' if state.running else '否' }}</div>
+          <div><strong>间隔:</strong> {{ state.interval_seconds }} 秒</div>
+          <div><strong>上次检查:</strong> {{ state.last_checked_at or '无' }}</div>
+        </div>
+        <div>
+          <div><strong>上次结果:</strong> {{ state.last_available_num }} 个可预约</div>
+          <div><strong>日期:</strong> {{ state.last_available_list | join(', ') if state.last_available_list else '无' }}</div>
+          <div><strong>eaiCode:</strong> {{ state.last_eai_code or '无' }}</div>
+        </div>
+        <div>
+          <div><strong>最近错误:</strong> {{ state.last_error or '无' }}</div>
+          <div class="muted">历史记录保存在内存中 ({{ state.history | length }} 条).</div>
+        </div>
+      </div>
+      <div class="actions" style="margin-top: 12px;">
+        {% if state.running %}
+          <form action="{{ url_for('stop_monitor') }}" method="post">
+            <button class="primary" type="submit">停止</button>
+          </form>
+        {% else %}
+          <form action="{{ url_for('start_monitor') }}" method="post">
+            <button class="primary" type="submit">开始</button>
+          </form>
+        {% endif %}
+        <a class="pill" href="{{ url_for('history') }}">查看历史</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>监控配置</h2>
+      <form action="{{ url_for('update_config') }}" method="post">
+        <div class="row">
+          <div>
+            <label for="check_dates">关注日期 (用逗号分隔)</label>
+            <input id="check_dates" type="text" name="check_dates" value="{{ state.check_dates | join(',') }}">
+          </div>
+          <div>
+            <label for="interval_seconds">轮询间隔 (秒)</label>
+            <input id="interval_seconds" type="number" min="10" name="interval_seconds" value="{{ state.interval_seconds }}">
+          </div>
+          <div>
+            <label>
+              <input type="checkbox" name="notify_on_available" {% if state.notify_on_available %}checked{% endif %}>
+              有可预约时发邮件
+            </label>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 12px;">
+          <div>
+            <label for="mail_host">SMTP 服务器</label>
+            <input id="mail_host" type="text" name="mail_host" value="{{ email.mail_host }}">
+          </div>
+          <div>
+            <label for="mail_user">SMTP 用户名 (QQ号)</label>
+            <input id="mail_user" type="text" name="mail_user" value="{{ email.mail_user }}">
+          </div>
+          <div>
+            <label for="mail_pass">SMTP 授权码</label>
+            <input id="mail_pass" type="password" name="mail_pass" value="{{ email.mail_pass }}">
+          </div>
+        </div>
+        <div class="row" style="margin-top: 12px;">
+          <div>
+            <label for="sender">发件人邮箱</label>
+            <input id="sender" type="text" name="sender" value="{{ email.sender }}">
+          </div>
+          <div>
+            <label for="receivers">收件人邮箱 (用逗号分隔)</label>
+            <input id="receivers" type="text" name="receivers" value="{{ email.receivers }}">
+          </div>
+        </div>
+        <div class="actions" style="margin-top: 12px;">
+          <button class="primary" type="submit">保存配置</button>
+        </div>
+      </form>
+      <form action="{{ url_for('test_email') }}" method="post" style="margin-top: 12px;">
+        <button class="secondary" type="submit">发送测试邮件</button>
+      </form>
+    </div>
+  </main>
+</body>
+</html>

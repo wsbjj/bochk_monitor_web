@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>监控历史</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f6f7f9; color: #111; margin: 0; }
+    header { background: #0f2d52; color: #fff; padding: 16px 24px; }
+    main { max-width: 920px; margin: 24px auto; padding: 0 16px; }
+    .card { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
+    .muted { color: #666; }
+    a { color: #0f2d52; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>历史记录</h1>
+  </header>
+  <main>
+    <div class="card">
+      <a href="{{ url_for('index') }}">返回状态页</a>
+      <table style="margin-top: 12px;">
+        <thead>
+          <tr>
+            <th>检查时间</th>
+            <th>可预约数量</th>
+            <th>日期</th>
+            <th>eaiCode</th>
+            <th>错误</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in history %}
+          <tr>
+            <td>{{ item.checked_at }}</td>
+            <td>{{ item.available_num if item.available_num is not none else '无' }}</td>
+            <td>{{ item.available_list | join(', ') if item.available_list else '无' }}</td>
+            <td>{{ item.eai_code or '无' }}</td>
+            <td class="muted">{{ item.error or '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </main>
+</body>
+</html>
