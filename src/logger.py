@@ -9,6 +9,15 @@ import glob
 import re
 import ast
 from time import strftime
+import time
+
+# 让 logging 使用本地时区（Asia/Shanghai）
+# 必须设置 TZ 环境变量并调用 tzset (Linux/Unix) 才能生效
+os.environ['TZ'] = 'Asia/Shanghai'
+if hasattr(time, 'tzset'):
+    time.tzset()
+
+logging.Formatter.converter = lambda *args: time.localtime()
 
 def _get_data_dir():
     """Get the persistent data directory (shared with config)."""
