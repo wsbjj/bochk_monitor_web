@@ -4,6 +4,8 @@ Supports: QQ, Gmail, Outlook, Office365
 """
 import smtplib
 from email.mime.text import MIMEText
+import resend
+import os
 
 from .config import load_config
 
@@ -11,6 +13,7 @@ from .config import load_config
 # Email provider configurations
 EMAIL_PROVIDERS = {
     "smtp.qq.com": {"ssl_port": 465, "tls_port": 587},
+    "smtp.163.com": {"ssl_port": 465, "tls_port": 25},
     "smtp.gmail.com": {"ssl_port": 465, "tls_port": 587},
     "smtp.office365.com": {"ssl_port": 465, "tls_port": 587},
     "smtp-mail.outlook.com": {"ssl_port": 465, "tls_port": 587},
@@ -49,8 +52,8 @@ def send_email(title, content):
     # Auto-detect port if not specified
     if mail_port is None:
         if mail_host in EMAIL_PROVIDERS:
-            # Outlook prefers TLS (587), others prefer SSL (465)
-            if "outlook" in mail_host.lower():
+            # Outlook/Office365 prefers TLS (587), others prefer SSL (465)
+            if "outlook" in mail_host.lower() or "office365" in mail_host.lower():
                 mail_port = EMAIL_PROVIDERS[mail_host]["tls_port"]
             else:
                 mail_port = EMAIL_PROVIDERS[mail_host]["ssl_port"]
@@ -79,11 +82,39 @@ def send_email(title, content):
         smtp_obj.quit()
         print("Email sent successfully!")
         return True
-    except smtplib.SMTPException as e:
-        print(f"SMTP Error: {e}")
-        return False
     except Exception as e:
-        print(f"Email Error: {e}")
+        print(f"SMTP Error: {e}")
+        print("Attempting to send via Resend fallback...")
+        return send_via_resend(title, content, receivers)
+
+
+def send_via_resend(title, content, receivers):
+    """
+    Send email using Resend API as a fallback.
+    """
+    try:
+        api_key = os.getenv("RESEND_API_KEY")
+        if not api_key:
+            print("RESEND_API_KEY not found in environment variables.")
+            return False
+            
+        resend.api_key = api_key
+        
+        # Format content as HTML since Resend prefers it, or supports it
+        html_content = f"<p>{content}</p>"
+        
+        params = {
+            "from": "onboarding@resend.dev",
+            "to": receivers,
+            "subject": title,
+            "html": html_content
+        }
+        
+        r = resend.Emails.send(params)
+        print(f"Resend email sent: {r}")
+        return True
+    except Exception as e:
+        print(f"Resend Error: {e}")
         return False
 
 

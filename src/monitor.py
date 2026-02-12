@@ -52,7 +52,7 @@ def parse(res_json, check_dates):
     Returns:
         tuple: (number of available dates, list of available dates)
     """
-    logger.info(str(res_json))
+    # logger.info(str(res_json))
     dateQuota = res_json.get("dateQuota", {})
     available_date_list = []
     

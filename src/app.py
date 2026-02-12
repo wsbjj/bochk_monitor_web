@@ -4,17 +4,21 @@ This module provides a web interface for monitoring BOCHK appointment availabili
 managing monitor configuration, and viewing monitoring history.
 """
 
-import os
-import threading
-import time
+import glob
 from datetime import datetime, timedelta
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+from flask_basicauth import BasicAuth
 
 from .config import load_config, save_config
-from .logger import logger
+from .logger import logger, read_history_from_logs
 from .monitor import get_jsonAvailableDateAndTime, parse
 from .send_email import send_email
+
+
+import os
+import threading
+import time
 
 
 def create_app():
@@ -33,6 +37,13 @@ def create_app():
     app.secret_key = os.getenv(
         "FLASK_SECRET_KEY", "bochk-monitor-secret-key-change-in-production"
     )
+
+    # Configure Basic Auth
+    app.config['BASIC_AUTH_USERNAME'] = os.getenv('ADMIN_USERNAME', 'admin')
+    app.config['BASIC_AUTH_PASSWORD'] = os.getenv('ADMIN_PASSWORD', 'admin')
+    app.config['BASIC_AUTH_FORCE'] = True  # Protect entire site
+
+    basic_auth = BasicAuth(app)
 
     # Initialize monitor state and register routes
     monitor_state = MonitorState(load_config())
@@ -160,34 +171,48 @@ class MonitorState:
 
             try:
                 res_json = get_jsonAvailableDateAndTime()
-                available_num, available_list = parse(res_json, check_dates)
+                # Log raw response for analysis
+                logger.info(res_json)
+                
+                # Use "all" to get all available dates for history/logging
+                total_available_num, total_available_list = parse(res_json, ["all"])
                 eai_code = res_json.get("eaiCode")
                 checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+                # Log the cycle summary for history parsing
+                logger.info(f"Monitor cycle: {total_available_num} available dates: {total_available_list}")
+
+                # Determine which dates trigger notification
+                if "all" in check_dates:
+                    notify_list = total_available_list
+                else:
+                    # Filter: only dates that are in check_dates
+                    notify_list = [d for d in total_available_list if d in check_dates]
+
                 with self.lock:
                     self.last_checked_at = checked_at
-                    self.last_available_num = available_num
-                    self.last_available_list = list(available_list)
+                    self.last_available_num = total_available_num
+                    self.last_available_list = list(total_available_list)
                     self.last_eai_code = eai_code
                     self.last_error = None
                     self._append_history(
                         {
                             "checked_at": checked_at,
-                            "available_num": available_num,
-                            "available_list": list(available_list),
+                            "available_num": total_available_num,
+                            "available_list": list(total_available_list),
                             "eai_code": eai_code,
                             "error": None,
                         }
                     )
 
-                if available_num > 0 and notify_on_available:
+                if len(notify_list) > 0 and notify_on_available:
                     send_email(
                         "BOCHK appointment available",
-                        "Available dates: {dates}".format(
-                            dates=", ".join(available_list)
+                        "Available dates matching your criteria: {dates}".format(
+                            dates=", ".join(notify_list)
                         ),
                     )
-                    logger.info("Email notification sent")
+                    logger.info(f"Email notification sent for dates: {notify_list}")
 
             except Exception as exc:  # pragma: no cover - defensive logging
                 checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -227,6 +252,11 @@ def register_routes(app, monitor_state):
         monitor_state (MonitorState): Shared monitor state object.
     """
 
+    @app.route("/favicon.ico")
+    def favicon():
+        """Serve favicon.ico."""
+        return app.send_static_file("favicon.ico")
+
     @app.route("/")
     def index():
         """Display main monitoring dashboard."""
@@ -245,8 +275,9 @@ def register_routes(app, monitor_state):
     @app.route("/history")
     def history():
         """Display monitoring history in reverse chronological order."""
-        state = monitor_state.snapshot()
-        return render_template("history.html", history=state["history"][::-1])
+        # Read from logs to show full history
+        full_history = read_history_from_logs()
+        return render_template("history.html", history=full_history[::-1])
 
     @app.route("/config", methods=["POST"])
     def update_config():
@@ -263,10 +294,12 @@ def register_routes(app, monitor_state):
         receivers_raw = request.form.get("receivers", "")
 
         # Handle monitor_all mode
-        if monitor_all:
-            check_dates = ["all"]
-        else:
-            check_dates = parse_dates_input(check_dates_raw)
+        # Priority: If user entered specific dates, use them. 
+        # Otherwise if "Monitor All" is checked, use ["all"].
+        check_dates = parse_dates_input(check_dates_raw)
+        
+        if not check_dates and monitor_all:
+             check_dates = ["all"]
 
         interval_seconds = parse_interval_input(interval_raw)
         receivers = parse_dates_input(receivers_raw)

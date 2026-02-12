@@ -3,19 +3,19 @@
     "check_dates": [
       "20260213",
       "20260214",
-      "20260223",
-      "20260224"
+      "20260215"
     ],
     "interval_seconds": 60,
     "notify_on_available": true
   },
   "email": {
     "mail_host": "smtp.qq.com",
-    "mail_user": "",
-    "mail_pass": "",
-    "sender": "",
+    "mail_port": 465,
+    "mail_user": "user@example.com",
+    "mail_pass": "your_password_or_auth_code",
+    "sender": "user@example.com",
     "receivers": [
-      ""
+      "receiver@example.com"
     ]
   }
 }
