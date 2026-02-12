@@ -11,13 +11,19 @@ import ast
 from time import strftime
 import time
 
-# 让 logging 使用本地时区（Asia/Shanghai）
-# 必须设置 TZ 环境变量并调用 tzset (Linux/Unix) 才能生效
-os.environ['TZ'] = 'Asia/Shanghai'
-if hasattr(time, 'tzset'):
-    time.tzset()
+# Get timezone offset from env, default to 0
+# Calculation: User Timezone - Server Timezone
+# Example: User GMT+8, Server GMT-4 => Offset = 8 - (-4) = 12
+try:
+    TIMEZONE_OFFSET = float(os.getenv("TIMEZONE_OFFSET", "0"))
+except ValueError:
+    TIMEZONE_OFFSET = 0
 
-logging.Formatter.converter = lambda *args: time.localtime()
+def custom_time_converter(timestamp):
+    """Convert timestamp to struct_time with timezone offset applied."""
+    return time.localtime(timestamp + TIMEZONE_OFFSET * 3600)
+
+logging.Formatter.converter = staticmethod(custom_time_converter)
 
 def _get_data_dir():
     """Get the persistent data directory (shared with config)."""

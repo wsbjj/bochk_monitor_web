@@ -121,7 +121,11 @@ MONITOR_CHECK_DATES=20260213,20260214  # 重点关注日期（逗号分隔）
 MONITOR_INTERVAL_SECONDS=120           # 检查间隔（秒）
 MONITOR_NOTIFY_ON_AVAILABLE=true       # 有号时是否通知
 MONITOR_ALL_DATES=false                # 是否关注所有日期（true则忽略CHECK_DATES）
-TZ=Asia/Shanghai                       # 设置日志时区（推荐 Asia/Shanghai）
+
+# 时区配置
+TIMEZONE_OFFSET=0                      # 手动设置偏移量 (单位：小时)
+                                       # 计算公式：用户时区 - 服务器时区
+                                       # 例：用户GMT+8，服务器GMT-4 => 8-(-4)=12
 ```
 
 #### 配置文件 (可选)
