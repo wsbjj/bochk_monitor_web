@@ -177,10 +177,13 @@ class MonitorState:
                 # Use "all" to get all available dates for history/logging
                 total_available_num, total_available_list = parse(res_json, ["all"])
                 eai_code = res_json.get("eaiCode")
-                checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Use time.localtime() to respect TZ environment variable/tzset()
+                checked_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
                 # Log the cycle summary for history parsing
-                logger.info(f"Monitor cycle: {total_available_num} available dates: {total_available_list}")
+                if total_available_num > 0:
+                    logger.info(f"Monitor cycle: {total_available_num} available dates: {total_available_list}")
 
                 # Determine which dates trigger notification
                 if "all" in check_dates:
