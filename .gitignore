@@ -10,11 +10,13 @@ venv/
 env/
 
 # Logs
-logs/
+# logs/ (logs are now in data/logs)
 *.log
 
 # Local config with secrets
-config/config.json
+data/
+!data/config.json.example
+!data/.keep
 .env
 
 # IDE

@@ -12,6 +12,10 @@ Environment variables:
 import os
 from src.app import app, monitor_state
 
+# Start monitor automatically when imported by Gunicorn
+# This ensures monitoring starts without needing manual intervention
+monitor_state.start()
+
 if __name__ == "__main__":
     # Get port from environment or use default
     port = int(os.getenv("PORT", 5000))

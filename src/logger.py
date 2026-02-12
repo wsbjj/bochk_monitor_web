@@ -10,8 +10,13 @@ import re
 import ast
 from time import strftime
 
-# Create logs directory path
-LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+def _get_data_dir():
+    """Get the persistent data directory (shared with config)."""
+    project_root = os.path.dirname(os.path.dirname(__file__))
+    return os.path.join(project_root, "data")
+
+# Create logs directory path inside data directory
+LOGS_DIR = os.path.join(_get_data_dir(), "logs")
 # Log filename based on date (daily log file)
 LOG_FILENAME = os.path.join(LOGS_DIR, strftime("bochk_monitor_%Y_%m_%d.log"))
 
@@ -30,6 +35,9 @@ def read_history_from_logs():
     # Legacy/Raw JSON log pattern: 2026-02-12 11:19:55,717 INFO: {'acceptTerms': None, ...}
     json_pattern = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*INFO: (\{.*\})")
     
+    # Keep track of timestamps to prevent duplicates (since we log both summary and raw JSON now)
+    seen_timestamps = set()
+
     for log_file in log_files:
         try:
             with open(log_file, 'r', encoding='utf-8') as f:
@@ -37,6 +45,11 @@ def read_history_from_logs():
                     cycle_match = cycle_pattern.search(line)
                     if cycle_match:
                         checked_at = cycle_match.group(1)
+                        
+                        # Dedup: if we already have a record for this second, skip
+                        if checked_at in seen_timestamps:
+                            continue
+                            
                         available_num = int(cycle_match.group(2))
                         available_list_str = cycle_match.group(3)
                         # Parse list string "['20260213', '20260214']" -> list
@@ -49,11 +62,17 @@ def read_history_from_logs():
                             "eai_code": "SUCCESS", 
                             "error": None
                         })
+                        seen_timestamps.add(checked_at)
                         continue
                         
                     error_match = error_pattern.search(line)
                     if error_match:
                         checked_at = error_match.group(1)
+                        
+                        # Dedup
+                        if checked_at in seen_timestamps:
+                            continue
+
                         error_msg = error_match.group(2)
                         history.append({
                             "checked_at": checked_at,
@@ -62,6 +81,7 @@ def read_history_from_logs():
                             "eai_code": None,
                             "error": error_msg
                         })
+                        seen_timestamps.add(checked_at)
                         continue
 
                     # Fallback: Try to parse raw JSON log (for older logs)
@@ -69,6 +89,11 @@ def read_history_from_logs():
                     if json_match:
                         try:
                             checked_at = json_match.group(1)
+                            
+                            # Dedup
+                            if checked_at in seen_timestamps:
+                                continue
+
                             json_str = json_match.group(2)
                             data = ast.literal_eval(json_str)
                             
@@ -86,6 +111,7 @@ def read_history_from_logs():
                                     "eai_code": data.get('eaiCode', 'SUCCESS'),
                                     "error": None
                                 })
+                                seen_timestamps.add(checked_at)
                         except Exception:
                             pass # Ignore parse errors for JSON lines
                             

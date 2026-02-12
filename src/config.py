@@ -29,11 +29,20 @@ DEFAULT_CONFIG = {
 _CONFIG_LOCK = threading.Lock()
 
 
+def _get_data_dir():
+    """Get the persistent data directory."""
+    # Try to find a persistent volume mount point
+    # Railway usually allows mounting at arbitrary paths, but if user mounts at /app/data
+    # we should check that.
+    # Default to "data" folder in project root
+    project_root = os.path.dirname(os.path.dirname(__file__))
+    return os.path.join(project_root, "data")
+
+
 def _config_path():
-    """Get the path to config.json in the config directory."""
-    return os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "config", "config.json"
-    )
+    """Get the path to config.json in the data directory."""
+    data_dir = _get_data_dir()
+    return os.path.join(data_dir, "config.json")
 
 
 def _merge_config(base, override):
