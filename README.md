@@ -9,9 +9,10 @@
 ✅ **Web 安全保护** - 全站 HTTP Basic Auth 访问密码保护，防止未授权访问
 ✅ **多渠道邮件通知** - 支持 163、QQ、Gmail、Outlook、Office365
 ✅ **每日日志系统** - 按天生成日志文件，记录原始 API 响应，方便历史追溯与分析
+✅ **持久化存储** - 支持 Docker/Railway 挂载单一数据卷，确保配置和日志不丢失
 ✅ **Web 管理界面** - 基于 Bootstrap 5.3 的现代化 UI，支持自动刷新与历史记录查看
-✅ **Railway 云部署** - 完全优化的部署配置，支持一键部署
-✅ **配置优先级** - 环境变量 > config.json > 默认值
+✅ **Railway 云部署** - 提供 railway.toml 配置文件，支持一键部署
+✅ **配置优先级** - 环境变量 > data/config.json > 默认值
 
 ### 项目结构
 
@@ -26,24 +27,25 @@ bochk_monitor/
 │   ├── monitor.py               # 核心监控逻辑
 │   └── app.py                   # Flask Web 应用
 │
-├── config/                       # 配置文件目录
-│   ├── config.json              # 运行时配置
-│   └── config.json.example      # 配置示例
+├── data/                         # 持久化数据目录 (建议挂载 Volume)
+│   ├── config.json              # 运行时配置 (可选)
+│   ├── config.json.example      # 配置示例
+│   └── logs/                    # 日志文件目录（按天轮转）
 │
 ├── docs/                         # 文档
-│   ├── README-RAILWAY.md        # Railway 部署指南
+│   ├── RAILWAY-VOLUME-GUIDE.md  # Railway 挂载卷指南
+│   ├── QUICKSTART-RAILWAY.md    # Railway 快速部署指南
 │   └── ...
 │
 ├── templates/                    # Flask 模板
 │   ├── index.html               # 主页面
 │   └── history.html             # 历史记录页面
 │
-├── logs/                         # 日志文件目录（按天轮转）
-│
 ├── web.py                        # Web 服务入口点
 ├── run_cli.py                    # 命令行监控入口点 (CLI Worker)
 ├── .env.example                  # 环境变量示例
-├── Procfile                      # Railway 部署配置
+├── railway.toml                  # Railway 部署配置文件
+├── Procfile                      # Heroku/Railway 进程配置
 ├── requirements.txt              # Python 依赖
 └── README.md                     # 项目说明
 ```
@@ -59,6 +61,9 @@ cp .env.example .env
 # 编辑 .env 填入配置（包括邮件、Resend Key、访问密码等）
 nano .env
 
+# 初始化数据目录（如果不存在）
+mkdir -p data/logs
+
 # 安装依赖
 pip install -r requirements.txt
 
@@ -73,13 +78,15 @@ python run_cli.py
 
 #### 2. Railway 部署
 
-详见 [docs/QUICKSTART-RAILWAY.md](docs/QUICKSTART-RAILWAY.md)
+本项目已包含 `railway.toml`，可直接部署。
 
 **关键步骤：**
 1. 推送代码到 GitHub
 2. 在 Railway 连接 GitHub 仓库
-3. 设置必需的环境变量（见下文配置说明）
-4. 等待部署完成
+3. **重要**：添加一个 Volume 挂载到 `/app/data` (用于持久化保存日志和配置文件)
+   - 详见 [docs/RAILWAY-VOLUME-GUIDE.md](docs/RAILWAY-VOLUME-GUIDE.md)
+4. 设置必需的环境变量（见下文配置说明）
+5. 等待部署完成
 
 ### 配置说明
 
@@ -98,53 +105,34 @@ FLASK_SECRET_KEY=random_string  # Flask 会话密钥
 ```env
 # 主选：SMTP (支持 163/QQ/Gmail/Office365)
 MAIL_HOST=smtp.163.com
+MAIL_PORT=465                   # 465 (SSL) 或 587 (TLS)
 MAIL_USER=your_email@163.com
-MAIL_PASS=your_auth_code        # 授权码
+MAIL_PASS=your_auth_code        # 邮箱授权码
 SENDER=your_email@163.com
-RECEIVERS=receiver@example.com
+RECEIVERS=receiver1@gmail.com,receiver2@outlook.com
 
-# 备选：Resend API (冗余备份)
-RESEND_API_KEY=re_123456789     # Resend API Key
+# 备选：Resend API (当 SMTP 失败时自动使用)
+RESEND_API_KEY=re_123456789...
 ```
 
-**监控参数**
+**监控配置**
 ```env
-MONITOR_CHECK_DATES=20260213,20260214  # 关注日期
-MONITOR_INTERVAL_SECONDS=60            # 轮询间隔
-MONITOR_NOTIFY_ON_AVAILABLE=true       # 是否发邮件
+MONITOR_CHECK_DATES=20260213,20260214  # 重点关注日期（逗号分隔）
+MONITOR_INTERVAL_SECONDS=120           # 检查间隔（秒）
+MONITOR_NOTIFY_ON_AVAILABLE=true       # 有号时是否通知
+MONITOR_ALL_DATES=false                # 是否关注所有日期（true则忽略CHECK_DATES）
 ```
 
-### 入口点说明
+#### 配置文件 (可选)
 
-#### `web.py` - Web 服务
-启动 Flask Web 应用，提供可视化管理界面、实时状态查看和日志历史分析。
+如果你更喜欢使用文件配置，可以在 `data/` 目录下创建 `config.json`：
 
-#### `run_cli.py` - CLI Worker 服务
-纯后台监控进程，适合无需 Web 界面的服务器环境或作为独立的 Worker 进程运行。
+```bash
+cp data/config.json.example data/config.json
+```
 
-### 支持的邮件提供商
-
-| 提供商    | SMTP 服务器        | 端口    | 说明                                |
-| --------- | ------------------ | ------- | ----------------------------------- |
-| **163**   | smtp.163.com       | 465/25  | 推荐，国内访问稳定                  |
-| **QQ**    | smtp.qq.com        | 465/587 | 需在邮箱设置中开启 SMTP             |
-| Gmail     | smtp.gmail.com     | 587     | 需使用应用专用密码                  |
-| Office365 | smtp.office365.com | 587     | 标准 Office365 配置                 |
-
-### 常见问题
-
-**Q: 为什么收不到邮件？**
-A:
-1. 检查 `MAIL_PASS` 是否为授权码（非登录密码）。
-2. 检查是否配置了 `RESEND_API_KEY` 作为备用。
-3. 确认“关注日期”是否设置正确（系统只对关注日期的放号发送通知）。
-
-**Q: 历史记录里的原始日志是什么？**
-A: 系统会记录每次 API 请求返回的完整 JSON 数据，方便您分析中银系统的返回结构和排查问题。
-
-**Q: 如何修改访问密码？**
-A: 修改环境变量 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 即可。
+注意：环境变量的优先级高于 `config.json`。
 
 ### 许可证
 
-MIT
+MIT License
