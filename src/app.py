@@ -5,13 +5,13 @@ managing monitor configuration, and viewing monitoring history.
 """
 
 import glob
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 from flask_basicauth import BasicAuth
 
 from .config import load_config, save_config
-from .logger import logger, read_history_from_logs
+from .logger import logger, read_history_from_logs, TIMEZONE_OFFSET
 from .monitor import get_jsonAvailableDateAndTime, parse
 from .send_email import send_email
 
@@ -19,6 +19,21 @@ from .send_email import send_email
 import os
 import threading
 import time
+
+# Build a fixed timezone from the same offset used in logger.py
+_TZ_SHANGHAI = timezone(timedelta(hours=TIMEZONE_OFFSET)) if TIMEZONE_OFFSET else None
+
+
+def _now():
+    """Return timezone-aware current time (Asia/Shanghai if offset is set)."""
+    if _TZ_SHANGHAI:
+        return datetime.now(_TZ_SHANGHAI)
+    return datetime.now()
+
+
+def _now_str(fmt="%Y-%m-%d %H:%M:%S"):
+    """Return formatted current time string in the configured timezone."""
+    return _now().strftime(fmt)
 
 
 def create_app():
@@ -178,8 +193,7 @@ class MonitorState:
                 total_available_num, total_available_list = parse(res_json, ["all"])
                 eai_code = res_json.get("eaiCode")
                 
-                # Use time.localtime() to respect TZ environment variable/tzset()
-                checked_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                checked_at = _now_str()
 
                 # Log the cycle summary for history parsing
                 if total_available_num > 0:
@@ -218,7 +232,7 @@ class MonitorState:
                     logger.info(f"Email notification sent for dates: {notify_list}")
 
             except Exception as exc:  # pragma: no cover - defensive logging
-                checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                checked_at = _now_str()
                 error_text = str(exc)
                 with self.lock:
                     self.last_checked_at = checked_at
@@ -347,7 +361,7 @@ def register_routes(app, monitor_state):
     @app.route("/api/next-7-days", methods=["GET"])
     def get_next_7_days():
         """API endpoint returning next 7 days in YYYYMMDD format."""
-        today = datetime.now()
+        today = _now()
         dates = []
         for i in range(7):
             future_date = today + timedelta(days=i)
