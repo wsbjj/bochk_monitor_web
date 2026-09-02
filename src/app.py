@@ -13,6 +13,7 @@ from flask_basicauth import BasicAuth
 
 from .config import get_persistence_info, load_config, save_config
 from .logger import logger, read_history_from_logs, TIMEZONE_OFFSET
+from .version import APP_VERSION, get_build_time
 from .monitor import (
     collect_district_availability,
     cycle_available_count,
@@ -73,6 +74,13 @@ def create_app():
     app.config['BASIC_AUTH_FORCE'] = True  # Protect entire site
 
     basic_auth = BasicAuth(app)
+
+    @app.context_processor
+    def inject_app_meta():
+        return {
+            "app_version": APP_VERSION,
+            "build_time": get_build_time(),
+        }
 
     # Initialize monitor state and register routes
     monitor_state = MonitorState(load_config())

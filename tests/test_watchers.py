@@ -622,6 +622,7 @@ class ApiRouteTests(unittest.TestCase):
                 "ADMIN_PASSWORD": "secret",
                 "FLASK_SECRET_KEY": "test-secret",
                 "DATA_DIR": self.tmp.name,
+                "BUILD_TIME": "2026-09-02 21:02:00",
             },
             clear=False,
         )
@@ -680,3 +681,16 @@ class ApiRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
         self.assertIn("西贡分行(617)/20260903", html)
+
+    def test_footer_shows_version_and_build_time(self):
+        from src.app import create_app
+
+        app, _state = create_app()
+        client = app.test_client()
+        for path in ("/", "/history"):
+            response = client.get(path, auth=("admin", "secret"))
+            self.assertEqual(response.status_code, 200)
+            html = response.get_data(as_text=True)
+            self.assertIn("中银香港预约监控系统 v1.1", html)
+            self.assertIn("构建时间 2026-09-02 21:02:00", html)
+            self.assertNotIn("v1.0", html)
