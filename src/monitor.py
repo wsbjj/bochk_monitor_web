@@ -3,6 +3,7 @@ BOCHK appointment monitoring module.
 Core logic for checking appointment availability and sending notifications.
 """
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlencode
 
 import requests
@@ -448,14 +449,59 @@ def _districts_needing_timeslot_fallback(needed_districts, query_codes, dates_by
     return fallback_districts
 
 
+def collect_availability_by_dates(candidate_dates):
+    """Find bookable branches for known dates via jsonAvailableBrsByDT."""
+    dates = [date for date in (candidate_dates or []) if date]
+    if not dates:
+        return {}
+    districts = get_districts()
+    logger.info(
+        "No district watchers; resolving branches for dates %s across %s districts",
+        dates,
+        len(districts),
+    )
+
+    def probe(item):
+        _warmup_session()
+        return item["value"], _fill_via_brs_by_dt(
+            item["value"], dates, item.get("name") or item["value"]
+        )
+
+    result = {}
+    workers = min(6, max(1, len(districts)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for district, entries in pool.map(probe, districts):
+            result[district] = [
+                {
+                    "code": entry.get("code") or "",
+                    "name": entry.get("name") or entry.get("code") or "",
+                    "district_name": entry.get("district_name")
+                    or district_name(district),
+                    "dates": list(entry.get("dates") or []),
+                }
+                for entry in entries or []
+                if entry.get("dates")
+            ]
+    booked = sum(len(entries) for entries in result.values())
+    if booked:
+        logger.info("Resolved %s bookable branches from date scan", booked)
+    else:
+        logger.warning(
+            "Available dates %s but jsonAvailableBrsByDT returned no branches",
+            dates,
+        )
+    return result
+
+
 def collect_district_availability(watchers, candidate_dates):
     """Query unique districts/branches once per cycle.
 
+    Date-only watchers (no districts) scan all HK districts for the available dates.
     Returns district value -> list of {code, name, district_name, dates}.
     """
     needed_districts = unique_districts(watchers)
     if not needed_districts:
-        return {}
+        return collect_availability_by_dates(candidate_dates)
 
     names = {item["value"]: item["name"] for item in get_districts()}
     district_branches = {}

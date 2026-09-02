@@ -85,6 +85,29 @@ def _matching_dates(watcher_dates, candidate_dates):
     return [date for date in candidate_dates if date in wanted]
 
 
+def _hits_from_availability(watcher_dates, district_availability, branch_filter=None):
+    """Expand district availability into hit dicts, optionally filtered by branch."""
+    hits = []
+    for district, entries in (district_availability or {}).items():
+        for entry in entries or []:
+            code = entry.get("code") or ""
+            if branch_filter and code not in branch_filter:
+                continue
+            for date in _matching_dates(watcher_dates, entry.get("dates") or []):
+                hits.append(
+                    {
+                        "date": date,
+                        "district": district,
+                        "district_name": entry.get("district_name") or district,
+                        "branch_code": code or None,
+                        "branch_name": entry.get("name") or None,
+                        "address": entry.get("address") or None,
+                        "tel": entry.get("tel") or None,
+                    }
+                )
+    return hits
+
+
 def match_watcher(watcher, available_dates, district_availability):
     """Return hit dicts for one watcher.
 
@@ -97,6 +120,11 @@ def match_watcher(watcher, available_dates, district_availability):
     branch_filter = set(watcher["branch_codes"])
 
     if not districts:
+        expanded = _hits_from_availability(
+            watcher["dates"], district_availability, branch_filter=None
+        )
+        if expanded:
+            return expanded
         for date in _matching_dates(watcher["dates"], available_dates):
             hits.append(
                 {
@@ -111,22 +139,13 @@ def match_watcher(watcher, available_dates, district_availability):
 
     for district in districts:
         entries = district_availability.get(district) or []
-        for entry in entries:
-            code = entry.get("code") or ""
-            if branch_filter and code not in branch_filter:
-                continue
-            for date in _matching_dates(watcher["dates"], entry.get("dates") or []):
-                hits.append(
-                    {
-                        "date": date,
-                        "district": district,
-                        "district_name": entry.get("district_name") or district,
-                        "branch_code": code or None,
-                        "branch_name": entry.get("name") or None,
-                        "address": entry.get("address") or None,
-                        "tel": entry.get("tel") or None,
-                    }
-                )
+        hits.extend(
+            _hits_from_availability(
+                watcher["dates"],
+                {district: entries},
+                branch_filter=branch_filter,
+            )
+        )
     return hits
 
 

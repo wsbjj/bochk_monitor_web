@@ -100,6 +100,33 @@ class WatcherMatchTests(unittest.TestCase):
         self.assertEqual([hit["date"] for hit in hits], ["20260903"])
         self.assertIsNone(hits[0]["district"])
 
+    def test_date_only_match_expands_to_branches_when_availability_present(self):
+        hits = match_watcher(
+            {
+                "email": "a@qq.com",
+                "dates": [],
+                "districts": [],
+                "branch_codes": [],
+            },
+            ["20260910"],
+            {
+                "_sai_kung_district_F": [
+                    {
+                        "code": "617",
+                        "name": "西贡分行",
+                        "district_name": "西贡区",
+                        "dates": ["20260910"],
+                        "address": "新界西贡福民路22-40号西贡苑56及58号",
+                        "tel": "+852 3988 2388",
+                    }
+                ]
+            },
+        )
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["branch_name"], "西贡分行")
+        self.assertEqual(hits[0]["branch_code"], "617")
+        self.assertEqual(hits[0]["date"], "20260910")
+
     def test_district_any_branch_match(self):
         watcher = {
             "email": "a@qq.com",
@@ -360,6 +387,64 @@ class CollectAvailabilityTests(unittest.TestCase):
         mock_dates.assert_called_once_with("YL01")
         mock_fill.assert_not_called()
         self.assertEqual(result["_yuen_long_district_F"][0]["dates"], ["20260903"])
+
+    @mock.patch("src.monitor.get_branch_available_dates")
+    @mock.patch("src.monitor.get_branches")
+    @mock.patch("src.monitor.get_districts")
+    @mock.patch("src.monitor._fill_via_brs_by_dt")
+    def test_date_only_watchers_resolve_branches_from_available_dates(
+        self, mock_fill, mock_districts, mock_branches, mock_dates
+    ):
+        mock_districts.return_value = [
+            {"value": "_sai_kung_district_F", "name": "西贡区"}
+        ]
+        mock_fill.return_value = [
+            {
+                "code": "617",
+                "name": "西贡分行",
+                "district": "_sai_kung_district_F",
+                "district_name": "西贡区",
+                "dates": ["20260910"],
+            }
+        ]
+        watchers = [
+            {
+                "email": "a@qq.com",
+                "dates": ["20260903"],
+                "districts": [],
+                "branch_codes": [],
+            }
+        ]
+        from src.monitor import collect_district_availability
+
+        result = collect_district_availability(watchers, ["20260910"])
+        mock_branches.assert_not_called()
+        mock_dates.assert_not_called()
+        mock_fill.assert_called_once_with(
+            "_sai_kung_district_F", ["20260910"], "西贡区"
+        )
+        self.assertEqual(result["_sai_kung_district_F"][0]["code"], "617")
+        self.assertEqual(result["_sai_kung_district_F"][0]["dates"], ["20260910"])
+
+    @mock.patch("src.monitor.get_districts")
+    @mock.patch("src.monitor._fill_via_brs_by_dt")
+    def test_no_available_dates_skips_hk_wide_branch_scan(self, mock_fill, mock_districts):
+        from src.monitor import collect_district_availability
+
+        result = collect_district_availability(
+            [
+                {
+                    "email": "a@qq.com",
+                    "dates": ["20260903"],
+                    "districts": [],
+                    "branch_codes": [],
+                }
+            ],
+            [],
+        )
+        mock_districts.assert_not_called()
+        mock_fill.assert_not_called()
+        self.assertEqual(result, {})
 
 
 class BranchDetailRequestTests(unittest.TestCase):
