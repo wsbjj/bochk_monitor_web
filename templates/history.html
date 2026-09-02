@@ -32,9 +32,10 @@
           <table class="table table-hover table-sm">
             <thead class="table-light">
               <tr>
-                <th>检查时间</th>
+                  <th>检查时间</th>
                 <th>可预约数量</th>
                 <th>可预约日期</th>
+                <th>分行</th>
                 <th>eaiCode</th>
                 <th>错误信息</th>
               </tr>
@@ -59,6 +60,15 @@
                     <span class="text-muted">-</span>
                   {% endif %}
                 </td>
+                <td>
+                  {% if item.remarks %}
+                    <small>{{ item.remarks }}</small>
+                  {% elif item.available_branches %}
+                    <small>{{ item.available_branches | join(', ') }}</small>
+                  {% else %}
+                    <span class="text-muted">-</span>
+                  {% endif %}
+                </td>
                 <td><small>{{ item.eai_code or '-' }}</small></td>
                 <td>
                   {% if item.error %}
@@ -73,7 +83,7 @@
               {% endfor %}
               {% if not history %}
               <tr>
-                <td colspan="5" class="text-center text-muted py-4">暂无记录</td>
+                <td colspan="6" class="text-center text-muted py-4">暂无记录</td>
               </tr>
               {% endif %}
             </tbody>

@@ -12,7 +12,13 @@ from .districts import FALLBACK_DISTRICTS, district_name
 from .logger import logger
 from .send_email import send_email
 from .utils import sleep_display
-from .watchers import clean_watcher, format_hits, match_watcher, unique_districts
+from .watchers import (
+    clean_watcher,
+    format_branch_remarks,
+    format_hits,
+    match_watcher,
+    unique_districts,
+)
 
 
 BOCHK_BASE = "https://transaction.bochk.com/whk/form/openAccount/"
@@ -42,6 +48,7 @@ BOCHK_HEADERS = {
 
 _thread_local = threading.local()
 _district_cache = {"items": None}
+_branch_detail_cache = {}
 _cache_lock = threading.Lock()
 
 
@@ -81,6 +88,33 @@ def _post_json(action, payload, referer=None):
         response = _get_session().post(url, headers=headers, data=payload, timeout=15)
     except requests.RequestException as exc:
         logger.warning("%s request failed: %s", action, exc)
+        return {}
+    if response.status_code != 200:
+        logger.warning("%s HTTP %s", action, response.status_code)
+        return {}
+    text = (response.text or "").strip()
+    if not text.startswith("{") and not text.startswith("["):
+        logger.warning("%s returned non-JSON body", action)
+        return {}
+    try:
+        data = response.json()
+    except ValueError:
+        logger.warning("%s JSON parse failed", action)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _get_json(action, params, referer=None):
+    """GET a BOCHK JSON action and return a dict, or {} on failure."""
+    headers = dict(BOCHK_HEADERS)
+    headers.pop("Content-Type", None)
+    if referer:
+        headers["Referer"] = referer
+    url = BOCHK_BASE + action
+    try:
+        response = _get_session().get(url, headers=headers, params=params, timeout=15)
+    except requests.RequestException as exc:
+        logger.warning("%s GET failed: %s", action, exc)
         return {}
     if response.status_code != 200:
         logger.warning("%s HTTP %s", action, response.status_code)
@@ -194,6 +228,36 @@ def parse_branch_list(res_json):
     return items
 
 
+def parse_branch_detail(res_json):
+    """Parse jsonBranchDetail.action (nameCn, addressCn, telNo, code)."""
+    if not isinstance(res_json, dict):
+        return {}
+    code = str(res_json.get("code") or res_json.get("branchCode") or "").strip()
+    name = str(
+        res_json.get("nameCn")
+        or res_json.get("nameTw")
+        or res_json.get("nameEn")
+        or ""
+    ).strip()
+    address = str(
+        res_json.get("addressCn")
+        or res_json.get("addressTw")
+        or res_json.get("addressEn")
+        or ""
+    ).strip()
+    tel = str(res_json.get("telNo") or "").strip()
+    district_code = str(res_json.get("districtCode") or "").strip()
+    if not (code or name):
+        return {}
+    return {
+        "code": code,
+        "name": name,
+        "address": address,
+        "tel": tel,
+        "district_code": district_code,
+    }
+
+
 def normalize_date(value):
     """Normalize BOCHK date strings to YYYYMMDD."""
     if value is None:
@@ -270,6 +334,31 @@ def get_branch_available_dates(branch_code):
     payload = urlencode({"bean.branchCode": branch_code, "bean.precondition": "B"})
     data = _post_json("jsonBrAvailableDT.action", payload, referer=SUBMIT_REFERER)
     return parse_available_dates(data)
+
+
+def get_branch_detail(branch_code):
+    """GET jsonBranchDetail.action and cache nameCn/address/tel by branch code."""
+    code = str(branch_code or "").strip()
+    if not code:
+        return {}
+    with _cache_lock:
+        cached = _branch_detail_cache.get(code)
+        if cached is not None:
+            return dict(cached)
+    _warmup_session()
+    data = _get_json(
+        "jsonBranchDetail.action",
+        {"bean.branchCode": code},
+        referer=CONTINUE_REFERER,
+    )
+    detail = parse_branch_detail(data)
+    if not detail.get("code"):
+        detail = dict(detail)
+        detail["code"] = code
+    if detail.get("name"):
+        with _cache_lock:
+            _branch_detail_cache[code] = detail
+    return dict(detail)
 
 
 def json_available_brs_by_dt(date_yyyymmdd, timeslot, district):
@@ -441,6 +530,65 @@ def collect_district_availability(watchers, candidate_dates):
     return result
 
 
+def enrich_availability_with_details(district_availability):
+    """Fill official nameCn/address/tel via jsonBranchDetail, returning a new map."""
+    result = {}
+    for district, entries in (district_availability or {}).items():
+        updated = []
+        for entry in entries or []:
+            new_entry = dict(entry)
+            if new_entry.get("dates") and new_entry.get("code"):
+                detail = get_branch_detail(new_entry.get("code") or "")
+                if detail.get("name"):
+                    new_entry["name"] = detail["name"]
+                if detail.get("address"):
+                    new_entry["address"] = detail["address"]
+                if detail.get("tel"):
+                    new_entry["tel"] = detail["tel"]
+            updated.append(new_entry)
+        result[district] = updated
+    return result
+
+
+def flatten_available_slots(district_availability):
+    """Turn district availability into one row per branch+date."""
+    slots = []
+    for district, entries in (district_availability or {}).items():
+        for entry in entries or []:
+            for date in entry.get("dates") or []:
+                slots.append(
+                    {
+                        "date": date,
+                        "code": entry.get("code") or "",
+                        "name": entry.get("name") or entry.get("code") or "",
+                        "district": district,
+                        "district_name": entry.get("district_name") or "",
+                        "address": entry.get("address") or "",
+                        "tel": entry.get("tel") or "",
+                    }
+                )
+    return slots
+
+
+def cycle_available_count(date_count, slots):
+    """Count branch+date slots when present, otherwise the global date count."""
+    if slots:
+        return len(slots)
+    return int(date_count or 0)
+
+
+def log_monitor_cycle(available_num, available_list, slots):
+    """Write one cycle summary to console and the rotating log file."""
+    remarks = format_branch_remarks(slots) or "-"
+    logger.info(
+        "Monitor cycle: %s available dates: %s branches: %s",
+        cycle_available_count(available_num, slots),
+        available_list,
+        remarks,
+    )
+    return remarks
+
+
 def notify_watchers(watchers, available_dates, district_availability, notify=True):
     """Match each watcher independently and send at most one email per address."""
     sent = []
@@ -466,7 +614,7 @@ def notify_watchers(watchers, available_dates, district_availability, notify=Tru
             logger.info(
                 "Notification sent to %s for %s",
                 email,
-                [hit.get("date") for hit in hits],
+                format_branch_remarks(hits) or [hit.get("date") for hit in hits],
             )
     return sent
 
@@ -478,12 +626,13 @@ def run_monitor_cycle(config=None):
     notify = bool((config.get("monitor") or {}).get("notify_on_available", True))
     res_json = get_jsonAvailableDateAndTime()
     available_num, available_list = parse(res_json, ["all"])
-    logger.info(
-        "Monitor cycle: %s available dates: %s", available_num, available_list
+    district_availability = enrich_availability_with_details(
+        collect_district_availability(watchers, available_list)
     )
-    district_availability = collect_district_availability(watchers, available_list)
+    slots = flatten_available_slots(district_availability)
+    log_monitor_cycle(available_num, available_list, slots)
     notify_watchers(watchers, available_list, district_availability, notify=notify)
-    return available_num, available_list
+    return cycle_available_count(available_num, slots), available_list, slots
 
 
 def run_monitor(check_dates):

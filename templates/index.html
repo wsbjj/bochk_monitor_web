@@ -353,6 +353,9 @@
             {% if state.last_available_list %}
               <small class="text-muted d-block mt-2">日期: {{ state.last_available_list | join(', ') }}</small>
             {% endif %}
+            {% if state.last_available_branches %}
+              <small class="text-muted d-block mt-1">分行: {{ state.last_available_branches | join(', ') }}</small>
+            {% endif %}
           </div>
           <div class="col-md-6 mb-3">
             <p class="mb-1"><strong>最近错误:</strong></p>
@@ -405,7 +408,9 @@
                   </td>
                   <td>
                     {% if entry.error %}
-                      <span class="text-danger small text-truncate d-block" style="max-width: 200px;" title="{{ entry.error }}">{{ entry.error }}</span>
+                      <span class="text-danger small text-truncate d-block" style="max-width: 280px;" title="{{ entry.error }}">{{ entry.error }}</span>
+                    {% elif entry.remarks %}
+                      <span class="text-success small" title="{{ entry.remarks }}">{{ entry.remarks }}</span>
                     {% elif entry.available_num > 0 %}
                       <span class="text-success small">{{ entry.available_list | join(', ') }}</span>
                     {% else %}

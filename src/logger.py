@@ -35,104 +35,120 @@ LOGS_DIR = os.path.join(_get_data_dir(), "logs")
 # Log filename based on date (daily log file)
 LOG_FILENAME = os.path.join(LOGS_DIR, strftime("bochk_monitor_%Y_%m_%d.log"))
 
+CYCLE_PATTERN = re.compile(
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*Monitor cycle: (\d+) available dates: (\[[^\]]*\])(?: branches: (.*))?$"
+)
+ERROR_PATTERN = re.compile(
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*Monitoring error: (.*)"
+)
+JSON_PATTERN = re.compile(
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*INFO: (\{.*\})"
+)
+
+
+def parse_cycle_log_line(line):
+    """Parse one Monitor cycle log line into a history dict, or None."""
+    cycle_match = CYCLE_PATTERN.search(line)
+    if not cycle_match:
+        return None
+    available_list_str = cycle_match.group(3)
+    available_list = [
+        item.strip().strip("'").strip('"')
+        for item in available_list_str.strip("[]").split(",")
+        if item.strip()
+    ]
+    remarks_raw = (cycle_match.group(4) or "").strip()
+    if remarks_raw in ("", "-"):
+        remarks = None
+        available_branches = []
+    else:
+        remarks = remarks_raw
+        available_branches = [
+            part.strip() for part in remarks_raw.split(",") if part.strip()
+        ]
+    return {
+        "checked_at": cycle_match.group(1),
+        "available_num": int(cycle_match.group(2)),
+        "available_list": available_list,
+        "available_branches": available_branches,
+        "remarks": remarks,
+        "eai_code": "SUCCESS",
+        "error": None,
+    }
+
+
+def _upsert_history(history, index_by_ts, entry, replace=False):
+    """Keep one history row per second; cycle lines can replace JSON dumps."""
+    ts = entry["checked_at"]
+    if ts in index_by_ts:
+        if replace:
+            history[index_by_ts[ts]] = entry
+        return
+    index_by_ts[ts] = len(history)
+    history.append(entry)
+
 
 def read_history_from_logs():
     """Read and parse all log files to reconstruct history."""
     history = []
-    # Match both old hourly logs and new daily logs
     log_files = sorted(glob.glob(os.path.join(LOGS_DIR, "bochk_monitor_*.log")))
-    
-    # Regex patterns
-    # 2026-02-12 11:15:35,123 INFO: Monitor cycle: 0 available dates: []
-    cycle_pattern = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*Monitor cycle: (\d+) available dates: (\[.*\])")
-    # 2026-02-12 11:15:35,123 ERROR: Monitoring error: some error
-    error_pattern = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*Monitoring error: (.*)")
-    # Legacy/Raw JSON log pattern: 2026-02-12 11:19:55,717 INFO: {'acceptTerms': None, ...}
-    json_pattern = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*INFO: (\{.*\})")
-    
-    # Keep track of timestamps to prevent duplicates (since we log both summary and raw JSON now)
-    seen_timestamps = set()
+    index_by_ts = {}
 
     for log_file in log_files:
         try:
-            with open(log_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    cycle_match = cycle_pattern.search(line)
-                    if cycle_match:
-                        checked_at = cycle_match.group(1)
-                        
-                        # Dedup: if we already have a record for this second, skip
-                        if checked_at in seen_timestamps:
-                            continue
-                            
-                        available_num = int(cycle_match.group(2))
-                        available_list_str = cycle_match.group(3)
-                        # Parse list string "['20260213', '20260214']" -> list
-                        available_list = [d.strip().strip("'").strip('"') for d in available_list_str.strip("[]").split(",") if d.strip()]
-                        
-                        history.append({
-                            "checked_at": checked_at,
-                            "available_num": available_num,
-                            "available_list": available_list,
-                            "eai_code": "SUCCESS", 
-                            "error": None
-                        })
-                        seen_timestamps.add(checked_at)
+            with open(log_file, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    parsed = parse_cycle_log_line(line)
+                    if parsed:
+                        _upsert_history(history, index_by_ts, parsed, replace=True)
                         continue
-                        
-                    error_match = error_pattern.search(line)
+
+                    error_match = ERROR_PATTERN.search(line)
                     if error_match:
-                        checked_at = error_match.group(1)
-                        
-                        # Dedup
-                        if checked_at in seen_timestamps:
-                            continue
-
-                        error_msg = error_match.group(2)
-                        history.append({
-                            "checked_at": checked_at,
-                            "available_num": None,
-                            "available_list": [],
-                            "eai_code": None,
-                            "error": error_msg
-                        })
-                        seen_timestamps.add(checked_at)
+                        _upsert_history(
+                            history,
+                            index_by_ts,
+                            {
+                                "checked_at": error_match.group(1),
+                                "available_num": None,
+                                "available_list": [],
+                                "available_branches": [],
+                                "remarks": None,
+                                "eai_code": None,
+                                "error": error_match.group(2),
+                            },
+                        )
                         continue
 
-                    # Fallback: Try to parse raw JSON log (for older logs)
-                    json_match = json_pattern.search(line)
+                    json_match = JSON_PATTERN.search(line)
                     if json_match:
                         try:
-                            checked_at = json_match.group(1)
-                            
-                            # Dedup
-                            if checked_at in seen_timestamps:
-                                continue
-
-                            json_str = json_match.group(2)
-                            data = ast.literal_eval(json_str)
-                            
-                            if isinstance(data, dict) and 'dateQuota' in data:
-                                date_quota = data.get('dateQuota', {})
-                                available_list = []
-                                for date_key, status in date_quota.items():
-                                    if status != 'F':
-                                        available_list.append(date_key)
-                                
-                                history.append({
-                                    "checked_at": checked_at,
-                                    "available_num": len(available_list),
-                                    "available_list": available_list,
-                                    "eai_code": data.get('eaiCode', 'SUCCESS'),
-                                    "error": None
-                                })
-                                seen_timestamps.add(checked_at)
+                            data = ast.literal_eval(json_match.group(2))
+                            if isinstance(data, dict) and "dateQuota" in data:
+                                date_quota = data.get("dateQuota", {})
+                                available_list = [
+                                    date_key
+                                    for date_key, status in date_quota.items()
+                                    if status != "F"
+                                ]
+                                _upsert_history(
+                                    history,
+                                    index_by_ts,
+                                    {
+                                        "checked_at": json_match.group(1),
+                                        "available_num": len(available_list),
+                                        "available_list": available_list,
+                                        "available_branches": [],
+                                        "remarks": None,
+                                        "eai_code": data.get("eaiCode", "SUCCESS"),
+                                        "error": None,
+                                    },
+                                )
                         except Exception:
-                            pass # Ignore parse errors for JSON lines
-                            
+                            pass
         except Exception:
             continue
-            
+
     return history
 
 

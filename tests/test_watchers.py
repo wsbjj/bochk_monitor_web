@@ -4,9 +4,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from src.monitor import parse_available_dates, parse_branch_list, parse_district_list
+from src.logger import parse_cycle_log_line
+from src.monitor import parse_available_dates, parse_branch_detail, parse_branch_list, parse_district_list
 from src.send_email import send_email
-from src.watchers import match_watcher, normalize_watchers
+from src.watchers import format_branch_remarks, format_hits, match_watcher, normalize_watchers
 
 
 class WatcherMigrationTests(unittest.TestCase):
@@ -125,6 +126,32 @@ class WatcherMatchTests(unittest.TestCase):
         self.assertEqual(hits[0]["district"], "_yuen_long_district_F")
         self.assertEqual(hits[0]["branch_name"], "元朗分行")
 
+    def test_district_match_keeps_address_and_phone(self):
+        hits = match_watcher(
+            {
+                "email": "a@qq.com",
+                "dates": [],
+                "districts": ["_sai_kung_district_F"],
+                "branch_codes": ["617"],
+            },
+            [],
+            {
+                "_sai_kung_district_F": [
+                    {
+                        "code": "617",
+                        "name": "西贡分行",
+                        "district_name": "西贡区",
+                        "dates": ["20260903"],
+                        "address": "新界西贡福民路22-40号西贡苑56及58号",
+                        "tel": "+852 3988 2388",
+                    }
+                ]
+            },
+        )
+        self.assertEqual(hits[0]["branch_name"], "西贡分行")
+        self.assertEqual(hits[0]["address"], "新界西贡福民路22-40号西贡苑56及58号")
+        self.assertEqual(hits[0]["tel"], "+852 3988 2388")
+
     def test_district_and_branch_filter(self):
         watcher = {
             "email": "b@qq.com",
@@ -193,6 +220,82 @@ class BochkParseTests(unittest.TestCase):
         )
         self.assertEqual(dates, ["20260903", "20260910"])
 
+    def test_parse_branch_detail_uses_name_cn(self):
+        detail = parse_branch_detail(
+            {
+                "nameTw": "西貢分行",
+                "code": "617",
+                "districtCode": "_sai_kung_district",
+                "nameCn": "西贡分行",
+                "addressCn": "新界西贡福民路22-40号西贡苑56及58号",
+                "telNo": "+852 3988 2388",
+            }
+        )
+        self.assertEqual(detail["code"], "617")
+        self.assertEqual(detail["name"], "西贡分行")
+        self.assertIn("西贡", detail["address"])
+        self.assertEqual(detail["tel"], "+852 3988 2388")
+
+    def test_format_hits_includes_branch_address_and_phone(self):
+        body = format_hits(
+            [
+                {
+                    "date": "20260903",
+                    "district": "_sai_kung_district_F",
+                    "district_name": "西贡区",
+                    "branch_code": "617",
+                    "branch_name": "西贡分行",
+                    "address": "新界西贡福民路22-40号西贡苑56及58号",
+                    "tel": "+852 3988 2388",
+                }
+            ]
+        )
+        self.assertIn("分行：西贡分行（617）", body)
+        self.assertIn("日期：20260903", body)
+        self.assertIn("地址：新界西贡福民路22-40号西贡苑56及58号", body)
+        self.assertIn("电话：+852 3988 2388", body)
+
+    def test_format_branch_remarks_and_cycle_log_line(self):
+        remarks = format_branch_remarks(
+            [
+                {
+                    "name": "西贡分行",
+                    "code": "617",
+                    "date": "20260903",
+                }
+            ]
+        )
+        self.assertEqual(remarks, "西贡分行(617)/20260903")
+        parsed = parse_cycle_log_line(
+            "2026-09-02 17:43:36,000 INFO: Monitor cycle: 1 available dates: ['20260903'] branches: 西贡分行(617)/20260903"
+        )
+        self.assertEqual(parsed["available_list"], ["20260903"])
+        self.assertEqual(parsed["available_branches"], ["西贡分行(617)/20260903"])
+        self.assertEqual(parsed["remarks"], "西贡分行(617)/20260903")
+        self.assertEqual(
+            format_branch_remarks([{"date": "20260903", "branch_name": None}]),
+            "20260903",
+        )
+
+    def test_read_history_prefers_cycle_line_over_same_second_json(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            log_path = os.path.join(tmp.name, "bochk_monitor_2026_09_02.log")
+            with open(log_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "2026-09-02 17:43:36,000 INFO: {'dateQuota': {'20260903': 'A'}, 'eaiCode': 'SUCCESS'}\n"
+                    "2026-09-02 17:43:36,010 INFO: Monitor cycle: 1 available dates: ['20260903'] branches: 西贡分行(617)/20260903\n"
+                )
+            with mock.patch("src.logger.LOGS_DIR", tmp.name):
+                from src.logger import read_history_from_logs
+
+                history = read_history_from_logs()
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]["remarks"], "西贡分行(617)/20260903")
+            self.assertEqual(history[0]["available_branches"], ["西贡分行(617)/20260903"])
+        finally:
+            tmp.cleanup()
+
 
 class SendEmailRecipientTests(unittest.TestCase):
     @mock.patch("src.send_email.smtplib.SMTP_SSL")
@@ -259,6 +362,79 @@ class CollectAvailabilityTests(unittest.TestCase):
         self.assertEqual(result["_yuen_long_district_F"][0]["dates"], ["20260903"])
 
 
+class BranchDetailRequestTests(unittest.TestCase):
+    def tearDown(self):
+        from src import monitor
+
+        monitor._branch_detail_cache.clear()
+
+    @mock.patch("src.monitor._warmup_session")
+    @mock.patch("src.monitor._get_json")
+    def test_get_branch_detail_uses_get_and_continue_referer(self, mock_get, _warmup):
+        from src import monitor
+
+        monitor._branch_detail_cache.clear()
+        mock_get.return_value = {
+            "nameCn": "西贡分行",
+            "code": "617",
+            "addressCn": "新界西贡福民路22-40号西贡苑56及58号",
+            "telNo": "+852 3988 2388",
+        }
+        detail = monitor.get_branch_detail("617")
+        mock_get.assert_called_once_with(
+            "jsonBranchDetail.action",
+            {"bean.branchCode": "617"},
+            referer=monitor.CONTINUE_REFERER,
+        )
+        self.assertEqual(detail["name"], "西贡分行")
+        self.assertEqual(detail["address"], "新界西贡福民路22-40号西贡苑56及58号")
+
+    @mock.patch("src.monitor.get_branch_detail")
+    def test_enrich_skips_branches_without_dates(self, mock_detail):
+        from src.monitor import enrich_availability_with_details
+
+        result = enrich_availability_with_details(
+            {
+                "_sai_kung_district_F": [
+                    {"code": "617", "name": "西贡分行", "dates": []},
+                    {
+                        "code": "618",
+                        "name": "其它",
+                        "dates": ["20260903"],
+                    },
+                ]
+            }
+        )
+        mock_detail.assert_called_once_with("618")
+        self.assertEqual(result["_sai_kung_district_F"][0]["name"], "西贡分行")
+
+    @mock.patch("src.monitor.logger")
+    def test_log_monitor_cycle_writes_branch_remarks(self, mock_logger):
+        from src.monitor import log_monitor_cycle
+
+        remarks = log_monitor_cycle(
+            1,
+            ["20260903"],
+            [{"name": "西贡分行", "code": "617", "date": "20260903"}],
+        )
+        self.assertEqual(remarks, "西贡分行(617)/20260903")
+        logged = mock_logger.info.call_args[0]
+        self.assertEqual(logged[0], "Monitor cycle: %s available dates: %s branches: %s")
+        self.assertEqual(logged[1], 1)
+        self.assertEqual(logged[3], "西贡分行(617)/20260903")
+
+        mock_logger.reset_mock()
+        log_monitor_cycle(
+            5,
+            ["20260903", "20260904"],
+            [
+                {"name": "西贡分行", "code": "617", "date": "20260903"},
+                {"name": "西贡分行", "code": "617", "date": "20260904"},
+            ],
+        )
+        self.assertEqual(mock_logger.info.call_args[0][1], 2)
+
+
 class NotifyWatchersTests(unittest.TestCase):
     @mock.patch("src.monitor.send_email")
     def test_one_email_per_person_merges_hits(self, mock_send):
@@ -314,6 +490,42 @@ class NotifyWatchersTests(unittest.TestCase):
         self.assertEqual(sent, ["a@qq.com"])
         self.assertEqual(mock_send.call_count, 1)
 
+    @mock.patch("src.monitor.send_email")
+    def test_district_hit_email_includes_official_branch(self, mock_send):
+        mock_send.return_value = True
+        watchers = [
+            {
+                "email": "a@qq.com",
+                "dates": [],
+                "districts": ["_sai_kung_district_F"],
+                "branch_codes": ["617"],
+            }
+        ]
+        from src.monitor import notify_watchers
+
+        sent = notify_watchers(
+            watchers,
+            [],
+            {
+                "_sai_kung_district_F": [
+                    {
+                        "code": "617",
+                        "name": "西贡分行",
+                        "district_name": "西贡区",
+                        "dates": ["20260903"],
+                        "address": "新界西贡福民路22-40号西贡苑56及58号",
+                        "tel": "+852 3988 2388",
+                    }
+                ]
+            },
+            notify=True,
+        )
+        self.assertEqual(sent, ["a@qq.com"])
+        body = mock_send.call_args.args[1]
+        self.assertIn("分行：西贡分行（617）", body)
+        self.assertIn("地址：新界西贡福民路22-40号西贡苑56及58号", body)
+        self.assertIn("电话：+852 3988 2388", body)
+
 
 class ApiRouteTests(unittest.TestCase):
     def setUp(self):
@@ -362,3 +574,24 @@ class ApiRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["branches"][0]["code"], "YL01")
         mock_branches.assert_called_once_with("_yuen_long_district_F")
+
+    def test_index_recent_logs_show_branch_remarks(self):
+        from src.app import create_app
+
+        app, state = create_app()
+        with state.lock:
+            state.history = [
+                {
+                    "checked_at": "2026-09-02 17:43:36",
+                    "available_num": 1,
+                    "available_list": ["20260903"],
+                    "available_branches": ["西贡分行(617)/20260903"],
+                    "remarks": "西贡分行(617)/20260903",
+                    "eai_code": "SUCCESS",
+                    "error": None,
+                }
+            ]
+        response = app.test_client().get("/", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("西贡分行(617)/20260903", html)

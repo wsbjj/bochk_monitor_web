@@ -123,6 +123,8 @@ def match_watcher(watcher, available_dates, district_availability):
                         "district_name": entry.get("district_name") or district,
                         "branch_code": code or None,
                         "branch_name": entry.get("name") or None,
+                        "address": entry.get("address") or None,
+                        "tel": entry.get("tel") or None,
                     }
                 )
     return hits
@@ -132,15 +134,48 @@ def format_hits(hits):
     """Build a readable email body from hit dicts."""
     if not hits:
         return "中银香港暂无匹配预约。"
-    lines = ["中银香港可预约："]
-    for hit in hits:
-        parts = [hit.get("date") or ""]
+    lines = ["中银香港可预约", ""]
+    for index, hit in enumerate(hits, 1):
+        if len(hits) > 1:
+            lines.append("【{0}】".format(index))
+        if hit.get("date"):
+            lines.append("日期：{0}".format(hit["date"]))
+        branch_name = hit.get("branch_name") or ""
+        branch_code = hit.get("branch_code") or ""
+        if branch_name and branch_code:
+            lines.append("分行：{0}（{1}）".format(branch_name, branch_code))
+        elif branch_name or branch_code:
+            lines.append("分行：{0}".format(branch_name or branch_code))
         if hit.get("district_name") or hit.get("district"):
-            parts.append(hit.get("district_name") or hit.get("district"))
-        if hit.get("branch_name") or hit.get("branch_code"):
-            parts.append(hit.get("branch_name") or hit.get("branch_code"))
-        lines.append(" / ".join([part for part in parts if part]))
-    return "\n".join(lines)
+            lines.append("行政区：{0}".format(hit.get("district_name") or hit.get("district")))
+        if hit.get("address"):
+            lines.append("地址：{0}".format(hit["address"]))
+        if hit.get("tel"):
+            lines.append("电话：{0}".format(hit["tel"]))
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def format_branch_remarks(slots):
+    """Compact '西贡分行(617)/20260903' labels for logs and history remarks."""
+    parts = []
+    for slot in slots or []:
+        name = slot.get("name") or slot.get("branch_name") or ""
+        code = slot.get("code") or slot.get("branch_code") or ""
+        date = slot.get("date") or ""
+        if name and code:
+            label = "{0}({1})".format(name, code)
+        elif name or code:
+            label = name or code
+        elif date:
+            label = date
+        else:
+            continue
+        if date and (name or code):
+            label = "{0}/{1}".format(label, date)
+        if label not in parts:
+            parts.append(label)
+    return ", ".join(parts)
 
 
 def unique_districts(watchers):

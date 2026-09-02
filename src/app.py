@@ -15,9 +15,13 @@ from .config import get_persistence_info, load_config, save_config
 from .logger import logger, read_history_from_logs, TIMEZONE_OFFSET
 from .monitor import (
     collect_district_availability,
+    cycle_available_count,
+    enrich_availability_with_details,
+    flatten_available_slots,
     get_branches,
     get_districts,
     get_jsonAvailableDateAndTime,
+    log_monitor_cycle,
     notify_watchers,
     parse,
     peek_districts,
@@ -110,6 +114,7 @@ class MonitorState:
         self.last_checked_at = None
         self.last_available_num = 0
         self.last_available_list = []
+        self.last_available_branches = []
         self.last_eai_code = None
         self.last_error = None
         self.history = []
@@ -171,6 +176,7 @@ class MonitorState:
                 "last_checked_at": self.last_checked_at,
                 "last_available_num": self.last_available_num,
                 "last_available_list": list(self.last_available_list),
+                "last_available_branches": list(self.last_available_branches),
                 "last_eai_code": self.last_eai_code,
                 "last_error": self.last_error,
                 "history": list(self.history),
@@ -194,28 +200,34 @@ class MonitorState:
                 eai_code = res_json.get("eaiCode")
                 checked_at = _now_str()
 
-                if total_available_num > 0:
-                    logger.info(
-                        "Monitor cycle: %s available dates: %s",
-                        total_available_num,
-                        total_available_list,
-                    )
-
-                district_availability = collect_district_availability(
-                    watchers, total_available_list
+                district_availability = enrich_availability_with_details(
+                    collect_district_availability(watchers, total_available_list)
                 )
+                slots = flatten_available_slots(district_availability)
+                remarks = log_monitor_cycle(
+                    total_available_num, total_available_list, slots
+                )
+                branch_labels = [
+                    part.strip()
+                    for part in (remarks or "").split(",")
+                    if part.strip() and part.strip() != "-"
+                ]
+                display_num = cycle_available_count(total_available_num, slots)
 
                 with self.lock:
                     self.last_checked_at = checked_at
-                    self.last_available_num = total_available_num
+                    self.last_available_num = display_num
                     self.last_available_list = list(total_available_list)
+                    self.last_available_branches = list(branch_labels)
                     self.last_eai_code = eai_code
                     self.last_error = None
                     self._append_history(
                         {
                             "checked_at": checked_at,
-                            "available_num": total_available_num,
+                            "available_num": display_num,
                             "available_list": list(total_available_list),
+                            "available_branches": list(branch_labels),
+                            "remarks": remarks if remarks != "-" else None,
                             "eai_code": eai_code,
                             "error": None,
                         }
@@ -240,6 +252,8 @@ class MonitorState:
                             "checked_at": checked_at,
                             "available_num": None,
                             "available_list": [],
+                            "available_branches": [],
+                            "remarks": None,
                             "eai_code": None,
                             "error": error_text,
                         }
