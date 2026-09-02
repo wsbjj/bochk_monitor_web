@@ -12,6 +12,8 @@ import os
 import threading
 from dotenv import load_dotenv
 
+from .watchers import normalize_watchers
+
 # Load .env file if it exists
 load_dotenv()
 
@@ -29,6 +31,7 @@ DEFAULT_CONFIG = {
         "sender": "",
         "receivers": [""],
     },
+    "watchers": [],
 }
 
 _CONFIG_LOCK = threading.Lock()
@@ -179,7 +182,8 @@ def load_config():
     env_config = _load_config_from_env()
     file_config = _read_file_config()
     merged = _merge_config(DEFAULT_CONFIG, env_config)
-    return _merge_config(merged, file_config)
+    merged = _merge_config(merged, file_config)
+    return normalize_watchers(merged)
 
 
 def save_config(config):

@@ -20,14 +20,24 @@ EMAIL_PROVIDERS = {
 }
 
 
-def send_email(title, content):
+def _normalize_recipients(value):
+    """Turn a string or list of emails into a cleaned list."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.replace("\n", ",").split(",") if item.strip()]
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def send_email(title, content, to=None):
     """
     Send email notification.
-    
+
     Args:
         title: Email subject
         content: Email body text
-        
+        to: Optional recipient list. If omitted, uses email.receivers.
+
     Returns:
         bool: True if sent successfully, False otherwise
     """
@@ -38,11 +48,10 @@ def send_email(title, content):
     mail_user = email_config.get("mail_user", "")
     mail_pass = email_config.get("mail_pass", "")
     sender = email_config.get("sender", "")
-    receivers = email_config.get("receivers", [])
-
-    # Handle receivers as string
-    if isinstance(receivers, str):
-        receivers = [item.strip() for item in receivers.split(",") if item.strip()]
+    if to is None:
+        receivers = _normalize_recipients(email_config.get("receivers", []))
+    else:
+        receivers = _normalize_recipients(to)
 
     # Validate configuration
     if not (mail_user and mail_pass and sender and receivers):

@@ -5,6 +5,7 @@ managing monitor configuration, and viewing monitoring history.
 """
 
 import glob
+import json
 from datetime import datetime, timedelta, timezone
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
@@ -12,8 +13,17 @@ from flask_basicauth import BasicAuth
 
 from .config import get_persistence_info, load_config, save_config
 from .logger import logger, read_history_from_logs, TIMEZONE_OFFSET
-from .monitor import get_jsonAvailableDateAndTime, parse
+from .monitor import (
+    collect_district_availability,
+    get_branches,
+    get_districts,
+    get_jsonAvailableDateAndTime,
+    notify_watchers,
+    parse,
+    peek_districts,
+)
 from .send_email import send_email
+from .watchers import clean_watcher
 
 
 import os
@@ -92,9 +102,8 @@ class MonitorState:
         self.thread = None
         monitor_config = config.get("monitor", {})
         self.interval_seconds = int(monitor_config.get("interval_seconds", 60))
-        self.check_dates = list(
-            monitor_config.get("check_dates", ["20260213", "20260214", "20260215"])
-        )
+        self.check_dates = list(monitor_config.get("check_dates") or [])
+        self.watchers = [clean_watcher(item) for item in (config.get("watchers") or [])]
         self.notify_on_available = bool(
             monitor_config.get("notify_on_available", True)
         )
@@ -122,36 +131,28 @@ class MonitorState:
             self.running = False
             logger.info("Monitor stopped")
 
-    def update_config(self, check_dates, interval_seconds, notify_on_available):
-        """Update monitoring configuration.
-
-        Args:
-            check_dates (list): New dates to check.
-            interval_seconds (int): New polling interval in seconds.
-            notify_on_available (bool): Whether to send email on availability.
-        """
+    def update_config(self, interval_seconds, notify_on_available, watchers):
+        """Update monitoring configuration."""
         with self.lock:
-            self.check_dates = check_dates
             self.interval_seconds = interval_seconds
             self.notify_on_available = notify_on_available
+            self.watchers = [clean_watcher(item) for item in watchers]
+            self.check_dates = _union_watcher_dates(self.watchers)
 
     def apply_config(self, config):
-        """Apply configuration from config dict.
-
-        Args:
-            config (dict): Configuration dictionary.
-        """
+        """Apply configuration from config dict."""
         monitor_config = config.get("monitor", {})
         with self.lock:
-            self.check_dates = list(
-                monitor_config.get("check_dates", self.check_dates)
-            )
             self.interval_seconds = int(
                 monitor_config.get("interval_seconds", self.interval_seconds)
             )
             self.notify_on_available = bool(
                 monitor_config.get("notify_on_available", self.notify_on_available)
             )
+            self.watchers = [
+                clean_watcher(item) for item in (config.get("watchers") or [])
+            ]
+            self.check_dates = _union_watcher_dates(self.watchers)
 
     def snapshot(self):
         """Take thread-safe snapshot of current state.
@@ -165,6 +166,7 @@ class MonitorState:
                 "running": self.running,
                 "interval_seconds": self.interval_seconds,
                 "check_dates": list(self.check_dates),
+                "watchers": [dict(item) for item in self.watchers],
                 "notify_on_available": self.notify_on_available,
                 "last_checked_at": self.last_checked_at,
                 "last_available_num": self.last_available_num,
@@ -181,30 +183,27 @@ class MonitorState:
                 if not self.running:
                     break
                 interval_seconds = self.interval_seconds
-                check_dates = list(self.check_dates)
                 notify_on_available = self.notify_on_available
+                watchers = [dict(item) for item in self.watchers]
 
             try:
                 res_json = get_jsonAvailableDateAndTime()
-                # Log raw response for analysis
                 logger.info(res_json)
-                
-                # Use "all" to get all available dates for history/logging
+
                 total_available_num, total_available_list = parse(res_json, ["all"])
                 eai_code = res_json.get("eaiCode")
-                
                 checked_at = _now_str()
 
-                # Log the cycle summary for history parsing
                 if total_available_num > 0:
-                    logger.info(f"Monitor cycle: {total_available_num} available dates: {total_available_list}")
+                    logger.info(
+                        "Monitor cycle: %s available dates: %s",
+                        total_available_num,
+                        total_available_list,
+                    )
 
-                # Determine which dates trigger notification
-                if "all" in check_dates:
-                    notify_list = total_available_list
-                else:
-                    # Filter: only dates that are in check_dates
-                    notify_list = [d for d in total_available_list if d in check_dates]
+                district_availability = collect_district_availability(
+                    watchers, total_available_list
+                )
 
                 with self.lock:
                     self.last_checked_at = checked_at
@@ -222,14 +221,13 @@ class MonitorState:
                         }
                     )
 
-                if len(notify_list) > 0 and notify_on_available:
-                    send_email(
-                        "BOCHK appointment available",
-                        "Available dates matching your criteria: {dates}".format(
-                            dates=", ".join(notify_list)
-                        ),
+                if notify_on_available:
+                    notify_watchers(
+                        watchers,
+                        total_available_list,
+                        district_availability,
+                        notify=True,
                     )
-                    logger.info(f"Email notification sent for dates: {notify_list}")
 
             except Exception as exc:  # pragma: no cover - defensive logging
                 checked_at = _now_str()
@@ -287,12 +285,13 @@ def register_routes(app, monitor_state):
             "mail_user": email_config.get("mail_user", ""),
             "mail_pass": email_config.get("mail_pass", ""),
             "sender": email_config.get("sender", ""),
-            "receivers": ",".join(email_config.get("receivers", [])),
         }
         return render_template(
             "index.html",
             state=state,
             email=email_view,
+            watchers=config.get("watchers") or [],
+            districts=peek_districts(),
             persistence=get_persistence_info(),
         )
 
@@ -306,8 +305,6 @@ def register_routes(app, monitor_state):
     @app.route("/config", methods=["POST"])
     def update_config():
         """Update monitor and email configuration from form submission."""
-        monitor_all = request.form.get("monitor_all") == "on"
-        check_dates_raw = request.form.get("check_dates", "")
         interval_raw = request.form.get("interval_seconds", "60")
         notify_on_available = request.form.get("notify_on_available") == "on"
         mail_host = request.form.get("mail_host", "")
@@ -315,27 +312,20 @@ def register_routes(app, monitor_state):
         mail_user = request.form.get("mail_user", "")
         mail_pass = request.form.get("mail_pass", "")
         sender = request.form.get("sender", "")
-        receivers_raw = request.form.get("receivers", "")
-
-        # Handle monitor_all mode
-        # Priority: If user entered specific dates, use them. 
-        # Otherwise if "Monitor All" is checked, use ["all"].
-        check_dates = parse_dates_input(check_dates_raw)
-        
-        if not check_dates and monitor_all:
-             check_dates = ["all"]
-
+        watchers = parse_watchers_form(request)
+        if watchers is None:
+            flash("关注人配置无效，未保存。请刷新页面后重试。", "error")
+            return redirect(url_for("index"))
         interval_seconds = parse_interval_input(interval_raw)
-        receivers = parse_dates_input(receivers_raw)
 
-        # Parse mail_port (None if empty, otherwise int)
         mail_port = None
         if mail_port_raw and mail_port_raw.strip().isdigit():
             mail_port = int(mail_port_raw.strip())
 
         config = load_config()
+        config["watchers"] = watchers
         config["monitor"] = {
-            "check_dates": check_dates,
+            "check_dates": _union_watcher_dates(watchers),
             "interval_seconds": interval_seconds,
             "notify_on_available": notify_on_available,
         }
@@ -345,7 +335,7 @@ def register_routes(app, monitor_state):
             "mail_user": mail_user.strip(),
             "mail_pass": mail_pass.strip(),
             "sender": sender.strip(),
-            "receivers": receivers,
+            "receivers": [item["email"] for item in watchers],
         }
         try:
             save_config(config)
@@ -353,9 +343,7 @@ def register_routes(app, monitor_state):
             flash("配置保存失败：{error}".format(error=exc), "error")
             return redirect(url_for("index"))
 
-        monitor_state.update_config(
-            check_dates, interval_seconds, notify_on_available
-        )
+        monitor_state.update_config(interval_seconds, notify_on_available, watchers)
         saved_path = get_persistence_info()["config_path"]
         flash("配置已保存到 {path}，刷新后仍会保留。".format(path=saved_path), "success")
         return redirect(url_for("index"))
@@ -381,6 +369,17 @@ def register_routes(app, monitor_state):
             dates.append(date_str)
         return jsonify({"dates": dates})
 
+    @app.route("/api/districts", methods=["GET"])
+    def api_districts():
+        """Return BOCHK district list for the watcher form."""
+        return jsonify({"districts": get_districts()})
+
+    @app.route("/api/branches", methods=["GET"])
+    def api_branches():
+        """Return branches for one district."""
+        district = (request.args.get("district") or "").strip()
+        return jsonify({"district": district, "branches": get_branches(district)})
+
     @app.route("/start", methods=["POST"])
     def start_monitor():
         """Start background monitoring."""
@@ -394,6 +393,75 @@ def register_routes(app, monitor_state):
         return redirect(url_for("index"))
 
 
+def _union_watcher_dates(watchers):
+    """Collect unique dates from watchers; empty means at least one person watches any date."""
+    dates = []
+    for watcher in watchers:
+        cleaned = clean_watcher(watcher)
+        for date in cleaned["dates"]:
+            if date not in dates:
+                dates.append(date)
+    return dates
+
+
+def parse_watchers_form(request):
+    """Parse watchers from watchers_json, grouped fields, or legacy receivers.
+
+    Returns a list of watchers, or None when watchers_json is present but unusable
+    so the caller can refuse to overwrite saved people.
+    """
+    if "watchers_json" in request.form:
+        raw = (request.form.get("watchers_json") or "").strip()
+        if not raw:
+            return None
+        try:
+            loaded = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(loaded, list):
+            return None
+        cleaned = []
+        for item in loaded:
+            watcher = clean_watcher(item)
+            if watcher["email"]:
+                cleaned.append(watcher)
+        return cleaned
+    items = []
+    emails = request.form.getlist("email[]")
+    dates_list = request.form.getlist("dates[]")
+    districts_list = request.form.getlist("districts[]")
+    branches_list = request.form.getlist("branch_codes[]")
+    for index, email in enumerate(emails):
+        items.append(
+            {
+                "email": email,
+                "dates": dates_list[index] if index < len(dates_list) else "",
+                "districts": districts_list[index] if index < len(districts_list) else "",
+                "branch_codes": branches_list[index] if index < len(branches_list) else "",
+            }
+        )
+    if not items:
+        receivers = parse_dates_input(request.form.get("receivers", ""))
+        check_dates = parse_dates_input(request.form.get("check_dates", ""))
+        if request.form.get("monitor_all") == "on" and not check_dates:
+            check_dates = []
+        for email in receivers:
+            items.append(
+                {
+                    "email": email,
+                    "dates": list(check_dates),
+                    "districts": [],
+                    "branch_codes": [],
+                }
+            )
+    cleaned = []
+    for item in items:
+        watcher = clean_watcher(item)
+        if watcher["email"]:
+            cleaned.append(watcher)
+    return cleaned
+
+
 def parse_dates_input(value):
     """Parse comma/newline-separated date input into list.
 
@@ -403,7 +471,7 @@ def parse_dates_input(value):
     Returns:
         list: Cleaned list of non-empty items.
     """
-    items = [item.strip() for item in value.replace("\n", ",").split(",")]
+    items = [item.strip() for item in (value or "").replace("\n", ",").split(",")]
     return [item for item in items if item]
 
 

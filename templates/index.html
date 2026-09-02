@@ -20,30 +20,162 @@
     .date-input-group button { white-space: nowrap; }
   </style>
   <script>
-    function populateNext7Days() {
-      fetch('/api/next-7-days')
-        .then(r => r.json())
-        .then(data => {
-          document.getElementById('check_dates').value = data.dates.join(',');
-          document.getElementById('monitor_all_checkbox').checked = false;
-        })
-        .catch(err => alert('获取失败: ' + err));
-    }
-    
-    function toggleMonitorAll() {
-      const checkbox = document.getElementById('monitor_all_checkbox');
-      const input = document.getElementById('check_dates');
-      if (checkbox.checked) {
-        input.value = ''; // Clear input when "All" is selected
-      }
+    window.INITIAL_WATCHERS = {{ (watchers if watchers is defined else []) | tojson }};
+    window.DISTRICTS = {{ (districts if districts is defined else []) | tojson }};
+
+    function escapeHtml(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, function (char) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char];
+      });
     }
 
-    function onDateInput() {
-      const input = document.getElementById('check_dates');
-      const checkbox = document.getElementById('monitor_all_checkbox');
-      if (input.value.trim() !== '') {
-        checkbox.checked = false; // Uncheck "All" when user types
+    function districtOptionsHtml(selected) {
+      const chosen = selected || [];
+      return window.DISTRICTS.map(function (item) {
+        const isSelected = chosen.indexOf(item.value) >= 0 ? ' selected' : '';
+        return '<option value="' + escapeHtml(item.value) + '"' + isSelected + '>' +
+          escapeHtml(item.name) + '</option>';
+      }).join('');
+    }
+
+    function watcherCardHtml(watcher) {
+      const item = watcher || { email: '', dates: [], districts: [], branch_codes: [] };
+      const datesValue = (item.dates || []).join(',');
+      return (
+        '<div class="card mb-3 watcher-card">' +
+          '<div class="card-body">' +
+            '<div class="row">' +
+              '<div class="col-md-6 mb-3">' +
+                '<label class="form-label">邮箱</label>' +
+                '<input type="email" class="form-control watcher-email" value="' + escapeHtml(item.email) + '" placeholder="name@example.com">' +
+              '</div>' +
+              '<div class="col-md-6 mb-3">' +
+                '<label class="form-label">关注日期（YYYYMMDD，逗号分隔；留空=任意日期）</label>' +
+                '<div class="date-input-group">' +
+                  '<input type="text" class="form-control watcher-dates" value="' + escapeHtml(datesValue) + '" placeholder="例如：20260903,20260910">' +
+                  '<button type="button" class="btn btn-outline-secondary fill-next-7">未来7天</button>' +
+                '</div>' +
+              '</div>' +
+            '</div>' +
+            '<div class="row">' +
+              '<div class="col-md-6 mb-3">' +
+                '<label class="form-label">行政区（可多选；不选则只按日期）</label>' +
+                '<select class="form-select watcher-districts" multiple size="6">' +
+                  districtOptionsHtml(item.districts) +
+                '</select>' +
+              '</div>' +
+              '<div class="col-md-6 mb-3">' +
+                '<label class="form-label">分行（可多选；不选则该区任意分行）</label>' +
+                '<select class="form-select watcher-branches" multiple size="6" data-selected="' + escapeHtml((item.branch_codes || []).join(',')) + '"></select>' +
+                '<small class="text-muted watcher-branch-hint">先选行政区后再加载分行。列表为空时可先不选，按全区匹配。</small>' +
+              '</div>' +
+            '</div>' +
+            '<button type="button" class="btn btn-outline-danger btn-sm remove-watcher">删除此人</button>' +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    function selectedValues(selectEl) {
+      return Array.from(selectEl.selectedOptions).map(function (opt) { return opt.value; }).filter(Boolean);
+    }
+
+    function collectWatchers() {
+      const cards = document.querySelectorAll('.watcher-card');
+      const watchers = [];
+      cards.forEach(function (card) {
+        const email = card.querySelector('.watcher-email').value.trim();
+        if (!email) {
+          return;
+        }
+        const dates = card.querySelector('.watcher-dates').value.split(/[,\n]/).map(function (item) {
+          return item.trim();
+        }).filter(Boolean);
+        watchers.push({
+          email: email,
+          dates: dates,
+          districts: selectedValues(card.querySelector('.watcher-districts')),
+          branch_codes: selectedValues(card.querySelector('.watcher-branches'))
+        });
+      });
+      return watchers;
+    }
+
+    function addWatcherCard(watcher) {
+      const wrap = document.createElement('div');
+      wrap.innerHTML = watcherCardHtml(watcher);
+      const card = wrap.firstElementChild;
+      document.getElementById('watchers-list').appendChild(card);
+      refreshBranches(card);
+    }
+
+    function refreshBranches(card) {
+      const districtSelect = card.querySelector('.watcher-districts');
+      const branchSelect = card.querySelector('.watcher-branches');
+      const districts = selectedValues(districtSelect);
+      const previous = (branchSelect.getAttribute('data-selected') || '')
+        .split(',')
+        .map(function (item) { return item.trim(); })
+        .filter(Boolean)
+        .concat(selectedValues(branchSelect));
+      if (!districts.length) {
+        branchSelect.innerHTML = '';
+        branchSelect.disabled = true;
+        return;
       }
+      branchSelect.disabled = false;
+      const requests = districts.map(function (district) {
+        return fetch('/api/branches?district=' + encodeURIComponent(district), { credentials: 'same-origin' })
+          .then(function (resp) { return resp.json(); })
+          .catch(function () { return { branches: [] }; });
+      });
+      Promise.all(requests).then(function (results) {
+        const merged = [];
+        const seen = {};
+        results.forEach(function (data) {
+          (data.branches || []).forEach(function (branch) {
+            if (!branch.code || seen[branch.code]) {
+              return;
+            }
+            seen[branch.code] = true;
+            merged.push(branch);
+          });
+        });
+        branchSelect.innerHTML = merged.map(function (branch) {
+          return '<option value="' + escapeHtml(branch.code) + '">' + escapeHtml(branch.name) + '</option>';
+        }).join('');
+        Array.from(branchSelect.options).forEach(function (opt) {
+          if (previous.indexOf(opt.value) >= 0) {
+            opt.selected = true;
+          }
+        });
+        branchSelect.setAttribute('data-selected', selectedValues(branchSelect).join(','));
+      });
+    }
+
+    function localNext7Days() {
+      const dates = [];
+      const now = new Date();
+      for (let i = 0; i < 7; i++) {
+        const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+        const y = String(day.getFullYear());
+        const m = String(day.getMonth() + 1).padStart(2, '0');
+        const d = String(day.getDate()).padStart(2, '0');
+        dates.push(y + m + d);
+      }
+      return dates;
+    }
+
+    function populateNext7Days(input) {
+      fetch('/api/next-7-days', { credentials: 'same-origin' })
+        .then(function (resp) { return resp.json(); })
+        .then(function (data) {
+          const dates = data.dates || [];
+          input.value = dates.length ? dates.join(',') : localNext7Days().join(',');
+        })
+        .catch(function () {
+          input.value = localNext7Days().join(',');
+        });
     }
   </script>
 </head>
@@ -104,6 +236,7 @@
           </div>
           <div class="col-md-4 mb-3">
             <p class="mb-0"><strong>eaiCode:</strong> <span class="text-muted">{{ state.last_eai_code or '无' }}</span></p>
+            <p class="mb-0"><strong>关注人:</strong> <span class="text-muted">{{ (state.watchers or []) | length }} 人</span></p>
             <p class="mb-0"><strong>历史记录:</strong> <span class="text-muted">{{ state.history | length }} 条</span></p>
           </div>
         </div>
@@ -208,36 +341,18 @@
         <h5 class="mb-0">监控配置</h5>
       </div>
       <div class="card-body">
-        <form action="{{ url_for('update_config') }}" method="post">
-          <!-- Monitor Dates Section -->
-          <div class="mb-4">
-            <h6 class="mb-3">关注日期（邮件通知规则）</h6>
-            
-            <div class="mb-3">
-              <div class="form-check">
-                <input class="form-check-input" type="checkbox" id="monitor_all_checkbox" 
-                       name="monitor_all" {% if 'all' in state.check_dates %}checked{% endif %}
-                       onchange="toggleMonitorAll()">
-                <label class="form-check-label" for="monitor_all_checkbox">
-                  接收所有日期的邮件通知
-                </label>
-              </div>
-              <small class="text-muted d-block mt-2">
-                启用后，任何有号的日期都会触发邮件通知。系统始终会监控并记录所有日期的状态。
-              </small>
-            </div>
+        <form id="config-form" action="{{ url_for('update_config') }}" method="post">
+          <input type="hidden" name="watchers_json" id="watchers_json" value="">
 
-            <div class="mb-3">
-              <label for="check_dates" class="form-label">或仅关注具体日期 (YYYYMMDD格式，用逗号分隔)</label>
-              <div class="date-input-group">
-                <input id="check_dates" type="text" class="form-control" name="check_dates" 
-                       value="{% if 'all' not in state.check_dates %}{{ state.check_dates | join(',') }}{% endif %}"
-                       oninput="onDateInput()"
-                       placeholder="例如：20260213,20260214,20260215">
-                <button type="button" class="btn btn-outline-secondary" onclick="populateNext7Days()">未来7天</button>
-              </div>
-              <small class="text-muted d-block mt-2">在此输入日期后，将仅针对这些日期发送邮件通知（"接收所有"选项会自动取消）</small>
+          <div class="mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h6 class="mb-0">关注人</h6>
+              <button type="button" class="btn btn-outline-primary btn-sm" id="add-watcher">添加关注人</button>
             </div>
+            <p class="text-muted small mb-3">
+              每人独立设置日期和位置。未选行政区 = 只按全港日期余号；选了区未选分行 = 该区任意分行有号即通知。
+            </p>
+            <div id="watchers-list"></div>
           </div>
 
           <!-- Interval Section -->
@@ -303,11 +418,6 @@
                 <input id="sender" type="text" class="form-control" name="sender" 
                        value="{{ email.sender }}" placeholder="your@example.com">
               </div>
-              <div class="col-md-6 mb-3">
-                <label for="receivers" class="form-label">收件人邮箱</label>
-                <input id="receivers" type="text" class="form-control" name="receivers" 
-                       value="{{ email.receivers }}" placeholder="recipient1@example.com,recipient2@example.com">
-              </div>
             </div>
           </div>
 
@@ -327,23 +437,53 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script>
-    // Auto-refresh logic (every 60 seconds)
-    // Only refresh if user is not interacting with the form
     let isInteracting = false;
-    document.querySelectorAll('input, select, textarea').forEach(el => {
-      el.addEventListener('focus', () => isInteracting = true);
-      el.addEventListener('blur', () => isInteracting = false);
+    const configForm = document.getElementById('config-form');
+    configForm.addEventListener('focusin', function () { isInteracting = true; });
+    configForm.addEventListener('focusout', function () { isInteracting = false; });
+    configForm.addEventListener('submit', function () {
+      document.getElementById('watchers_json').value = JSON.stringify(collectWatchers());
+    });
+    configForm.addEventListener('change', function (event) {
+      if (event.target.classList.contains('watcher-districts')) {
+        const card = event.target.closest('.watcher-card');
+        if (card) {
+          refreshBranches(card);
+        }
+      }
+    });
+    configForm.addEventListener('click', function (event) {
+      const fillBtn = event.target.closest('.fill-next-7');
+      if (fillBtn) {
+        const input = fillBtn.closest('.watcher-card').querySelector('.watcher-dates');
+        populateNext7Days(input);
+      }
+      const removeBtn = event.target.closest('.remove-watcher');
+      if (removeBtn) {
+        const card = removeBtn.closest('.watcher-card');
+        if (card) {
+          card.remove();
+        }
+      }
+    });
+    document.getElementById('add-watcher').addEventListener('click', function () {
+      isInteracting = true;
+      addWatcherCard({ email: '', dates: [], districts: [], branch_codes: [] });
     });
 
-    setInterval(() => {
+    setInterval(function () {
       if (!isInteracting) {
         window.location.reload();
       }
     }, 60000);
 
-    // Initialize monitor_all state on load
-    document.addEventListener('DOMContentLoaded', function() {
-      // Ensure UI consistency if needed
+    document.addEventListener('DOMContentLoaded', function () {
+      const initial = window.INITIAL_WATCHERS && window.INITIAL_WATCHERS.length
+        ? window.INITIAL_WATCHERS
+        : [{ email: '', dates: [], districts: [], branch_codes: [] }];
+      initial.forEach(function (watcher) {
+        addWatcherCard(watcher);
+      });
     });
   </script>
 </body>
