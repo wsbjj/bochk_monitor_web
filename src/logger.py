@@ -27,8 +27,8 @@ logging.Formatter.converter = staticmethod(custom_time_converter)
 
 def _get_data_dir():
     """Get the persistent data directory (shared with config)."""
-    project_root = os.path.dirname(os.path.dirname(__file__))
-    return os.path.join(project_root, "data")
+    from .config import get_data_dir
+    return get_data_dir()
 
 # Create logs directory path inside data directory
 LOGS_DIR = os.path.join(_get_data_dir(), "logs")

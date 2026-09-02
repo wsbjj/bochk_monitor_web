@@ -67,6 +67,24 @@
       {% endif %}
     {% endwith %}
 
+    {% if persistence is defined %}
+    {% if persistence.persistent %}
+    <div class="alert alert-secondary" role="alert">
+      <small>
+        配置保存在 <code>{{ persistence.config_path }}</code>。
+        网页保存优先于 Railway 环境变量，刷新后不会回到默认值。
+        {% if persistence.source == "file" %}当前已读取已保存的配置文件。{% endif %}
+      </small>
+    </div>
+    {% else %}
+    <div class="alert alert-warning" role="alert">
+      <small>
+        未检测到 Railway Volume。当前写入 <code>{{ persistence.config_path }}</code>，容器重建后可能丢失。
+      </small>
+    </div>
+    {% endif %}
+    {% endif %}
+
     <!-- Status Card -->
     <div class="card mb-4">
       <div class="card-header">

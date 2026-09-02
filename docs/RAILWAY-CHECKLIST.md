@@ -186,9 +186,9 @@ FLASK_ENV=production
 如果你同时设置了多个配置来源，系统会按此优先级加载：
 
 ```
-环境变量 (.env on Railway)
+config.json (Web 修改保存)
          ↓ 覆盖
-    config.json (Web 修改保存)
+环境变量 (.env on Railway)
          ↓ 覆盖
     默认值 (DEFAULT_CONFIG)
 ```
@@ -196,8 +196,8 @@ FLASK_ENV=production
 **示例：**
 
 - 如果 Railway 环境变量设置 `MONITOR_INTERVAL_SECONDS=30`
-- 但 Web 中修改为 60 后保存到 config.json
-- 重启后会优先使用环境变量的 30，config.json 的 60 会被忽略
+- 在 Web 中修改为 60 后保存到 config.json
+- 刷新和重启后都会使用网页保存的 60，不再被环境变量覆盖
 
 ---
 

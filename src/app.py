@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 from flask_basicauth import BasicAuth
 
-from .config import load_config, save_config
+from .config import get_persistence_info, load_config, save_config
 from .logger import logger, read_history_from_logs, TIMEZONE_OFFSET
 from .monitor import get_jsonAvailableDateAndTime, parse
 from .send_email import send_email
@@ -280,14 +280,21 @@ def register_routes(app, monitor_state):
         state = monitor_state.snapshot()
         config = load_config()
         email_config = config.get("email", {})
+        mail_port = email_config.get("mail_port")
         email_view = {
             "mail_host": email_config.get("mail_host", ""),
+            "mail_port": mail_port if mail_port not in (None, "") else "",
             "mail_user": email_config.get("mail_user", ""),
             "mail_pass": email_config.get("mail_pass", ""),
             "sender": email_config.get("sender", ""),
             "receivers": ",".join(email_config.get("receivers", [])),
         }
-        return render_template("index.html", state=state, email=email_view)
+        return render_template(
+            "index.html",
+            state=state,
+            email=email_view,
+            persistence=get_persistence_info(),
+        )
 
     @app.route("/history")
     def history():
@@ -340,12 +347,17 @@ def register_routes(app, monitor_state):
             "sender": sender.strip(),
             "receivers": receivers,
         }
-        save_config(config)
+        try:
+            save_config(config)
+        except OSError as exc:
+            flash("配置保存失败：{error}".format(error=exc), "error")
+            return redirect(url_for("index"))
 
         monitor_state.update_config(
             check_dates, interval_seconds, notify_on_available
         )
-        flash("配置已保存", "success")
+        saved_path = get_persistence_info()["config_path"]
+        flash("配置已保存到 {path}，刷新后仍会保留。".format(path=saved_path), "success")
         return redirect(url_for("index"))
 
     @app.route("/test-email", methods=["POST"])

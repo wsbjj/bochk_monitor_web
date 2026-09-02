@@ -91,15 +91,14 @@ worker: python monitor.py
 
 系统按以下优先级加载配置：
 
-1. **环境变量 (.env)** - 最高优先级 ✅
-2. **config.json** - 其次（常用于 Web UI 修改）
+1. **config.json** - 最高优先级（Web UI 保存）
+2. **环境变量 (.env)** - 首次部署引导
 3. **默认值** - 最低级
 
 这意味着：
 
-- Railway 中设置的环境变量会覆盖 config.json
-- Web UI 修改会保存到 config.json
-- 重启应用时，.env 优先级最高
+- Web UI 保存后，刷新和重启都会使用 `config.json`
+- Railway 环境变量只在还没有保存过配置时生效
 
 ## 本地开发
 
@@ -152,7 +151,7 @@ A:
 
 - **Web 中修改**：访问 Web UI，在"轮询设置"中修改，点击保存
 - **环境变量修改**：设置 `MONITOR_INTERVAL_SECONDS=30`（单位秒）
-- 环境变量优先级更高，会覆盖 Web 中的设置
+- Web 保存的值优先于环境变量
 
 ### Q: 邮件发送失败怎么办？
 

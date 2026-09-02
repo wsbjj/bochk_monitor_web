@@ -12,7 +12,7 @@
 ✅ **持久化存储** - 支持 Docker/Railway 挂载单一数据卷，确保配置和日志不丢失
 ✅ **Web 管理界面** - 基于 Bootstrap 5.3 的现代化 UI，支持自动刷新与历史记录查看
 ✅ **Railway 云部署** - 提供 railway.toml 配置文件，支持一键部署
-✅ **配置优先级** - 环境变量 > data/config.json > 默认值
+✅ **配置优先级** - data/config.json（网页保存）> 环境变量 > 默认值
 
 ### 项目结构
 
@@ -136,7 +136,7 @@ TIMEZONE_OFFSET=0                      # 手动设置偏移量 (单位：小时)
 cp data/config.json.example data/config.json
 ```
 
-注意：环境变量的优先级高于 `config.json`。
+注意：网页保存的 `config.json` 优先级高于环境变量。环境变量只在尚未保存过配置时生效。
 
 ### 许可证
 

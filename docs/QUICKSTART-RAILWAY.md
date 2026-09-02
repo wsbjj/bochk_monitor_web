@@ -71,14 +71,14 @@ MONITOR_INTERVAL_SECONDS=60
 ## 📊 配置优先级
 
 ```
-Railway 环境变量（最高优先级）
+config.json（Web UI 保存，最高优先级）
     ↓ 覆盖
-config.json（Web UI 修改）
+Railway 环境变量（首次部署引导）
     ↓ 覆盖
 代码默认值
 ```
 
-**含义：** 环境变量设置后会覆盖本地 config.json
+**含义：** 在网页上保存后，刷新不再被 Railway 环境变量盖回去。环境变量只用于还没有 `config.json` 时的初始配置。
 
 ---
 
@@ -135,7 +135,7 @@ worker: python monitor.py
 | 邮件无法发送？     | 检查 MAIL_PASS 是否是授权码（不是密码）    |
 | Worker 无法启动？  | 检查两个 Service 是否都创建了              |
 | Railway 报错 502？ | 查看 Logs 中的 Python 错误                 |
-| 修改配置后无效？   | 检查环境变量是否设置，它优先于 config.json |
+| 修改配置后刷新还原？ | 已改为网页保存优先；请确认 Volume 挂载在 `/app/data` |
 | 怎样修改轮询频率？ | 在 Railway 改 MONITOR_INTERVAL_SECONDS     |
 
 ---
