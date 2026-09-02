@@ -18,10 +18,14 @@
     .date-input-group { display: flex; gap: 0.5rem; }
     .date-input-group input { flex: 1; }
     .date-input-group button { white-space: nowrap; }
+    .watcher-table td { vertical-align: middle; }
+    #watcher-editor { background-color: #fff; }
   </style>
   <script>
     window.INITIAL_WATCHERS = {{ (watchers if watchers is defined else []) | tojson }};
     window.DISTRICTS = {{ (districts if districts is defined else []) | tojson }};
+    window.watchersState = [];
+    window.editingIndex = null;
 
     function escapeHtml(value) {
       return String(value == null ? '' : value).replace(/[&<>"']/g, function (char) {
@@ -29,89 +33,188 @@
       });
     }
 
-    function districtOptionsHtml(selected) {
-      const chosen = selected || [];
-      return window.DISTRICTS.map(function (item) {
-        const isSelected = chosen.indexOf(item.value) >= 0 ? ' selected' : '';
-        return '<option value="' + escapeHtml(item.value) + '"' + isSelected + '>' +
-          escapeHtml(item.name) + '</option>';
-      }).join('');
+    function districtLabel(value) {
+      const found = (window.DISTRICTS || []).find(function (item) { return item.value === value; });
+      return found ? found.name : value;
     }
 
-    function watcherCardHtml(watcher) {
-      const item = watcher || { email: '', dates: [], districts: [], branch_codes: [] };
-      const datesValue = (item.dates || []).join(',');
-      return (
-        '<div class="card mb-3 watcher-card">' +
-          '<div class="card-body">' +
-            '<div class="row">' +
-              '<div class="col-md-6 mb-3">' +
-                '<label class="form-label">邮箱</label>' +
-                '<input type="email" class="form-control watcher-email" value="' + escapeHtml(item.email) + '" placeholder="name@example.com">' +
-              '</div>' +
-              '<div class="col-md-6 mb-3">' +
-                '<label class="form-label">关注日期（YYYYMMDD，逗号分隔；留空=任意日期）</label>' +
-                '<div class="date-input-group">' +
-                  '<input type="text" class="form-control watcher-dates" value="' + escapeHtml(datesValue) + '" placeholder="例如：20260903,20260910">' +
-                  '<button type="button" class="btn btn-outline-secondary fill-next-7">未来7天</button>' +
-                '</div>' +
-              '</div>' +
-            '</div>' +
-            '<div class="row">' +
-              '<div class="col-md-6 mb-3">' +
-                '<label class="form-label">行政区（可多选；不选则只按日期）</label>' +
-                '<select class="form-select watcher-districts" multiple size="6">' +
-                  districtOptionsHtml(item.districts) +
-                '</select>' +
-              '</div>' +
-              '<div class="col-md-6 mb-3">' +
-                '<label class="form-label">分行（可多选；不选则该区任意分行）</label>' +
-                '<select class="form-select watcher-branches" multiple size="6" data-selected="' + escapeHtml((item.branch_codes || []).join(',')) + '"></select>' +
-                '<small class="text-muted watcher-branch-hint">先选行政区后再加载分行。列表为空时可先不选，按全区匹配。</small>' +
-              '</div>' +
-            '</div>' +
-            '<button type="button" class="btn btn-outline-danger btn-sm remove-watcher">删除此人</button>' +
-          '</div>' +
-        '</div>'
-      );
+    function watchMode(watcher) {
+      if (watcher && watcher.districts && watcher.districts.length) {
+        return 'district';
+      }
+      return 'date';
+    }
+
+    function watcherSummary(watcher) {
+      if (watchMode(watcher) === 'district') {
+        const names = (watcher.districts || []).map(districtLabel);
+        const branches = (watcher.branch_codes || []).length
+          ? '，分行 ' + watcher.branch_codes.length + ' 家'
+          : '，区内任意分行';
+        return '行政区：' + names.join('、') + branches;
+      }
+      const dates = watcher.dates || [];
+      return dates.length ? '日期：' + dates.join('、') : '日期：任意';
+    }
+
+    function collectWatchers() {
+      return window.watchersState.map(function (watcher) {
+        if (watchMode(watcher) === 'district') {
+          return {
+            email: watcher.email,
+            dates: [],
+            districts: watcher.districts || [],
+            branch_codes: watcher.branch_codes || []
+          };
+        }
+        return {
+          email: watcher.email,
+          dates: watcher.dates || [],
+          districts: [],
+          branch_codes: []
+        };
+      });
+    }
+
+    function renderWatcherList() {
+      const tbody = document.getElementById('watchers-table-body');
+      const empty = document.getElementById('watchers-empty');
+      const table = document.getElementById('watchers-table');
+      tbody.innerHTML = '';
+      if (!window.watchersState.length) {
+        empty.classList.remove('d-none');
+        table.classList.add('d-none');
+        return;
+      }
+      empty.classList.add('d-none');
+      table.classList.remove('d-none');
+      window.watchersState.forEach(function (watcher, index) {
+        const modeText = watchMode(watcher) === 'district' ? '按行政区' : '按日期';
+        tbody.insertAdjacentHTML('beforeend',
+          '<tr>' +
+            '<td>' + escapeHtml(watcher.email) + '</td>' +
+            '<td><span class="badge text-bg-light border">' + escapeHtml(modeText) + '</span></td>' +
+            '<td class="small">' + escapeHtml(watcherSummary(watcher)) + '</td>' +
+            '<td class="text-nowrap">' +
+              '<button type="button" class="btn btn-outline-secondary btn-sm me-1 edit-watcher" data-index="' + index + '">编辑</button>' +
+              '<button type="button" class="btn btn-outline-danger btn-sm delete-watcher" data-index="' + index + '">删除</button>' +
+            '</td>' +
+          '</tr>'
+        );
+      });
     }
 
     function selectedValues(selectEl) {
       return Array.from(selectEl.selectedOptions).map(function (opt) { return opt.value; }).filter(Boolean);
     }
 
-    function collectWatchers() {
-      const cards = document.querySelectorAll('.watcher-card');
-      const watchers = [];
-      cards.forEach(function (card) {
-        const email = card.querySelector('.watcher-email').value.trim();
-        if (!email) {
-          return;
+    function fillDistrictOptions(selected) {
+      const select = document.getElementById('watcher-districts');
+      select.innerHTML = (window.DISTRICTS || []).map(function (item) {
+        const isSelected = (selected || []).indexOf(item.value) >= 0 ? ' selected' : '';
+        return '<option value="' + escapeHtml(item.value) + '"' + isSelected + '>' +
+          escapeHtml(item.name) + '</option>';
+      }).join('');
+    }
+
+    function syncModeFields() {
+      const mode = document.getElementById('watcher-mode').value;
+      document.getElementById('date-fields').classList.toggle('d-none', mode !== 'date');
+      document.getElementById('district-fields').classList.toggle('d-none', mode !== 'district');
+    }
+
+    function showWatcherEditor() {
+      document.getElementById('watcher-editor').classList.remove('d-none');
+      document.getElementById('watcher-editor-error').classList.add('d-none');
+    }
+
+    function hideWatcherEditor() {
+      window.editingIndex = null;
+      document.getElementById('watcher-editor').classList.add('d-none');
+      document.getElementById('watcher-email').value = '';
+      document.getElementById('watcher-dates').value = '';
+      document.getElementById('watcher-mode').value = 'date';
+      document.getElementById('watcher-branches').innerHTML = '';
+      document.getElementById('watcher-branches').disabled = true;
+      document.getElementById('watcher-branches').setAttribute('data-selected', '');
+      fillDistrictOptions([]);
+      syncModeFields();
+      document.getElementById('watcher-editor-title').textContent = '添加关注人';
+    }
+
+    function openWatcherEditor(watcher, index) {
+      window.editingIndex = index;
+      const item = watcher || { email: '', dates: [], districts: [], branch_codes: [] };
+      document.getElementById('watcher-editor-title').textContent =
+        index == null ? '添加关注人' : '编辑关注人';
+      document.getElementById('save-watcher').textContent =
+        index == null ? '加入列表' : '保存到列表';
+      document.getElementById('watcher-email').value = item.email || '';
+      document.getElementById('watcher-dates').value = (item.dates || []).join(',');
+      document.getElementById('watcher-mode').value = watchMode(item);
+      fillDistrictOptions(item.districts || []);
+      document.getElementById('watcher-branches').setAttribute(
+        'data-selected',
+        (item.branch_codes || []).join(',')
+      );
+      syncModeFields();
+      showWatcherEditor();
+      refreshBranches();
+    }
+
+    function readWatcherEditor() {
+      const email = document.getElementById('watcher-email').value.trim();
+      const mode = document.getElementById('watcher-mode').value;
+      const errorBox = document.getElementById('watcher-editor-error');
+      if (!email) {
+        errorBox.textContent = '请填写邮箱。';
+        errorBox.classList.remove('d-none');
+        return null;
+      }
+      if (mode === 'district') {
+        const districts = selectedValues(document.getElementById('watcher-districts'));
+        if (!districts.length) {
+          errorBox.textContent = '按行政区监控时请至少选择一个区。';
+          errorBox.classList.remove('d-none');
+          return null;
         }
-        const dates = card.querySelector('.watcher-dates').value.split(/[,\n]/).map(function (item) {
-          return item.trim();
-        }).filter(Boolean);
-        watchers.push({
+        errorBox.classList.add('d-none');
+        return {
           email: email,
-          dates: dates,
-          districts: selectedValues(card.querySelector('.watcher-districts')),
-          branch_codes: selectedValues(card.querySelector('.watcher-branches'))
-        });
-      });
-      return watchers;
+          dates: [],
+          districts: districts,
+          branch_codes: selectedValues(document.getElementById('watcher-branches'))
+        };
+      }
+      const dates = document.getElementById('watcher-dates').value.split(/[,\n]/).map(function (item) {
+        return item.trim();
+      }).filter(Boolean);
+      errorBox.classList.add('d-none');
+      return {
+        email: email,
+        dates: dates,
+        districts: [],
+        branch_codes: []
+      };
     }
 
-    function addWatcherCard(watcher) {
-      const wrap = document.createElement('div');
-      wrap.innerHTML = watcherCardHtml(watcher);
-      const card = wrap.firstElementChild;
-      document.getElementById('watchers-list').appendChild(card);
-      refreshBranches(card);
+    function saveWatcherEditor() {
+      const watcher = readWatcherEditor();
+      if (!watcher) {
+        return;
+      }
+      if (window.editingIndex == null) {
+        window.watchersState.push(watcher);
+      } else {
+        window.watchersState[window.editingIndex] = watcher;
+      }
+      renderWatcherList();
+      hideWatcherEditor();
     }
 
-    function refreshBranches(card) {
-      const districtSelect = card.querySelector('.watcher-districts');
-      const branchSelect = card.querySelector('.watcher-branches');
+    function refreshBranches() {
+      const districtSelect = document.getElementById('watcher-districts');
+      const branchSelect = document.getElementById('watcher-branches');
       const districts = selectedValues(districtSelect);
       const previous = (branchSelect.getAttribute('data-selected') || '')
         .split(',')
@@ -346,13 +449,66 @@
 
           <div class="mb-4">
             <div class="d-flex justify-content-between align-items-center mb-2">
-              <h6 class="mb-0">关注人</h6>
+              <h6 class="mb-0">关注人列表</h6>
               <button type="button" class="btn btn-outline-primary btn-sm" id="add-watcher">添加关注人</button>
             </div>
             <p class="text-muted small mb-3">
-              每人独立设置日期和位置。未选行政区 = 只按全港日期余号；选了区未选分行 = 该区任意分行有号即通知。
+              每人只选一种规则：按日期（全港余号）或按行政区（可选分行）。添加后点下方「保存配置」才会写入服务器。
             </p>
-            <div id="watchers-list"></div>
+            <div class="table-responsive">
+              <table id="watchers-table" class="table table-sm table-hover watcher-table mb-2 d-none">
+                <thead class="table-light">
+                  <tr>
+                    <th>邮箱</th>
+                    <th style="width: 7rem;">规则</th>
+                    <th>内容</th>
+                    <th style="width: 8rem;">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="watchers-table-body"></tbody>
+              </table>
+            </div>
+            <p id="watchers-empty" class="text-muted small">暂无关注人，请点击「添加关注人」。</p>
+
+            <div id="watcher-editor" class="border rounded p-3 d-none">
+              <h6 id="watcher-editor-title" class="mb-3">添加关注人</h6>
+              <div id="watcher-editor-error" class="alert alert-danger py-2 small d-none"></div>
+              <div class="row">
+                <div class="col-md-6 mb-3">
+                  <label class="form-label" for="watcher-email">邮箱</label>
+                  <input id="watcher-email" type="email" class="form-control" placeholder="name@example.com">
+                </div>
+                <div class="col-md-6 mb-3">
+                  <label class="form-label" for="watcher-mode">监控方式</label>
+                  <select id="watcher-mode" class="form-select">
+                    <option value="date">按日期（全港）</option>
+                    <option value="district">按行政区</option>
+                  </select>
+                </div>
+              </div>
+              <div id="date-fields" class="mb-3">
+                <label class="form-label" for="watcher-dates">关注日期（YYYYMMDD，逗号分隔；留空=任意日期）</label>
+                <div class="date-input-group">
+                  <input id="watcher-dates" type="text" class="form-control" placeholder="例如：20260903,20260910">
+                  <button type="button" class="btn btn-outline-secondary" id="fill-next-7">未来7天</button>
+                </div>
+              </div>
+              <div id="district-fields" class="row d-none">
+                <div class="col-md-6 mb-3">
+                  <label class="form-label" for="watcher-districts">行政区（可多选）</label>
+                  <select id="watcher-districts" class="form-select" multiple size="6"></select>
+                </div>
+                <div class="col-md-6 mb-3">
+                  <label class="form-label" for="watcher-branches">分行（可多选；不选则该区任意分行）</label>
+                  <select id="watcher-branches" class="form-select" multiple size="6" disabled></select>
+                  <small class="text-muted">先选行政区后再加载分行。列表为空时可先不选，按全区匹配。</small>
+                </div>
+              </div>
+              <div class="d-flex gap-2">
+                <button type="button" class="btn btn-primary btn-sm" id="save-watcher">加入列表</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="cancel-watcher">取消</button>
+              </div>
+            </div>
           </div>
 
           <!-- Interval Section -->
@@ -442,48 +598,65 @@
     configForm.addEventListener('focusin', function () { isInteracting = true; });
     configForm.addEventListener('focusout', function () { isInteracting = false; });
     configForm.addEventListener('submit', function () {
+      if (!document.getElementById('watcher-editor').classList.contains('d-none')) {
+        const pending = readWatcherEditor();
+        if (pending) {
+          saveWatcherEditor();
+        }
+      }
       document.getElementById('watchers_json').value = JSON.stringify(collectWatchers());
     });
     configForm.addEventListener('change', function (event) {
-      if (event.target.classList.contains('watcher-districts')) {
-        const card = event.target.closest('.watcher-card');
-        if (card) {
-          refreshBranches(card);
-        }
+      if (event.target.id === 'watcher-mode') {
+        syncModeFields();
+      }
+      if (event.target.id === 'watcher-districts') {
+        refreshBranches();
       }
     });
-    configForm.addEventListener('click', function (event) {
-      const fillBtn = event.target.closest('.fill-next-7');
-      if (fillBtn) {
-        const input = fillBtn.closest('.watcher-card').querySelector('.watcher-dates');
-        populateNext7Days(input);
-      }
-      const removeBtn = event.target.closest('.remove-watcher');
-      if (removeBtn) {
-        const card = removeBtn.closest('.watcher-card');
-        if (card) {
-          card.remove();
-        }
-      }
+    document.getElementById('fill-next-7').addEventListener('click', function () {
+      populateNext7Days(document.getElementById('watcher-dates'));
     });
+    document.getElementById('save-watcher').addEventListener('click', function () {
+      isInteracting = true;
+      saveWatcherEditor();
+    });
+    document.getElementById('cancel-watcher').addEventListener('click', hideWatcherEditor);
     document.getElementById('add-watcher').addEventListener('click', function () {
       isInteracting = true;
-      addWatcherCard({ email: '', dates: [], districts: [], branch_codes: [] });
+      openWatcherEditor({ email: '', dates: [], districts: [], branch_codes: [] }, null);
+    });
+    document.getElementById('watchers-table-body').addEventListener('click', function (event) {
+      const editBtn = event.target.closest('.edit-watcher');
+      if (editBtn) {
+        isInteracting = true;
+        const index = Number(editBtn.getAttribute('data-index'));
+        openWatcherEditor(window.watchersState[index], index);
+        return;
+      }
+      const deleteBtn = event.target.closest('.delete-watcher');
+      if (deleteBtn) {
+        isInteracting = true;
+        const index = Number(deleteBtn.getAttribute('data-index'));
+        window.watchersState.splice(index, 1);
+        renderWatcherList();
+        hideWatcherEditor();
+      }
     });
 
     setInterval(function () {
-      if (!isInteracting) {
+      const editorOpen = !document.getElementById('watcher-editor').classList.contains('d-none');
+      if (!isInteracting && !editorOpen) {
         window.location.reload();
       }
     }, 60000);
 
     document.addEventListener('DOMContentLoaded', function () {
-      const initial = window.INITIAL_WATCHERS && window.INITIAL_WATCHERS.length
-        ? window.INITIAL_WATCHERS
-        : [{ email: '', dates: [], districts: [], branch_codes: [] }];
-      initial.forEach(function (watcher) {
-        addWatcherCard(watcher);
+      fillDistrictOptions([]);
+      window.watchersState = (window.INITIAL_WATCHERS || []).filter(function (item) {
+        return item && item.email;
       });
+      renderWatcherList();
     });
   </script>
 </body>

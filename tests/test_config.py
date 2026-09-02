@@ -289,6 +289,8 @@ class ConfigFormRoundtripTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.get_data(as_text=True)
+        self.assertIn("关注人列表", body)
+        self.assertIn("监控方式", body)
         self.assertIn("2801011889@qq.com", body)
         self.assertIn("_yuen_long_district_F", body)
         self.assertNotIn("env-user@qq.com", body)
